@@ -1,221 +1,103 @@
-# miab-radar
+<div align="center">
 
-<p align="center">
-  <b>Production-grade Mail-in-a-Box monitoring & audit tool</b>
-</p>
+# 📬 miab-radar
 
-<p align="center">
-  Deep visibility into mail server health, deliverability, and security — directly from your terminal.
-</p>
+### High-signal health, deliverability and security diagnostics for Mail-in-a-Box
 
-<p align="center">
-  <img src="https://img.shields.io/badge/bash-4%2B-blue">
-  <img src="https://img.shields.io/badge/status-active-success">
-  <img src="https://img.shields.io/badge/license-MIT-green">
-</p>
+<img src="https://img.shields.io/badge/Bash-4%2B-121011?style=for-the-badge&logo=gnubash&logoColor=white" alt="Bash 4+">
+<img src="https://img.shields.io/badge/Mail--in--a--Box-ready-2563eb?style=for-the-badge" alt="Mail-in-a-Box">
+<img src="https://img.shields.io/badge/status-active-16a34a?style=for-the-badge" alt="Active">
+<img src="https://img.shields.io/github/license/Anton-Babaskin/miab-radar?style=for-the-badge&color=0ea5e9" alt="License">
 
----
+<a href="#-quick-run">Quick Run</a> · <a href="#-coverage">Coverage</a> · <a href="#-automation">Automation</a> · <a href="#exit-codes">Exit Codes</a>
 
-## Overview
-
-**miab-radar** is a high-signal diagnostic and monitoring tool for Mail-in-a-Box servers.
-
-It goes far beyond basic status checks by analyzing:
-
-* real mail logs
-* delivery behavior
-* DNS configuration
-* blacklist status
-* security posture
-
-Designed for sysadmins and DevOps engineers who want **actionable insights**, not noise.
+</div>
 
 ---
 
-## Key Features
+## ⚡ Quick Run
 
-### Mail & Deliverability
-
-* Mail queue inspection (active / deferred / stuck)
-* Bounce & deferred analysis (with reasons)
-* Top senders and recipients
-* SMTP flow visibility
-
-### DNS & Reputation
-
-* SPF / DKIM / DMARC validation
-* PTR (reverse DNS) verification
-* Blacklist checks:
-
-  * Spamhaus (ZEN, DBL)
-  * Spamcop
-  * Barracuda
-  * SORBS
-
-### Security
-
-* Brute-force detection from logs
-* Fail2Ban status (per jail)
-* SSH hardening checks
-* Open relay protection validation
-
-### TLS & Encryption
-
-* Certificate validity checks (SMTP, IMAPS, HTTPS)
-* Expiration alerts
-* STARTTLS verification
-
-### System Health
-
-* Service monitoring (Postfix, Dovecot, Nginx, etc.)
-* Disk & inode usage
-* Mailbox size analysis
-* Backup freshness validation
-
-### Smart Output
-
-* Clear OK / WARN / FAIL classification
-* Prioritized recommendations
-* Exit codes for automation
-
----
-
-## Example Output
-
-See real output:
-
-```
-examples/output.txt
-```
-
----
-
-## Installation
-
-Clone the repository:
-
-```
-git clone https://github.com/YOUR_USERNAME/miab-radar.git
+```bash
+git clone https://github.com/Anton-Babaskin/miab-radar.git
 cd miab-radar
 chmod +x miab-radar.sh
-```
-
-Optional global install:
-
-```
-sudo ./install.sh
-```
-
----
-
-## Usage
-
-Run full audit:
-
-```
 sudo ./miab-radar.sh
 ```
 
-Specify time window (in hours):
+Inspect a wider 48-hour log window:
 
-```
+```bash
 sudo ./miab-radar.sh 48
 ```
 
----
+> [!NOTE]
+> Run directly on the Mail-in-a-Box host. The tool is terminal-first, dependency-light and focused on actionable findings.
 
-## Automation (Cron)
+## 🎯 What it is for
 
-Run every 30 minutes:
+`miab-radar` turns Mail-in-a-Box service state, queues, logs, DNS, TLS and security signals into a prioritized **OK / WARN / FAIL** view. It is built for operational troubleshooting—not dashboards or long-term metrics storage.
 
+## 🔭 Coverage
+
+| Area | Signals |
+|---|---|
+| 📮 Mail flow | active/deferred/stuck queue, bounces, deferrals, senders, recipients and SMTP behavior |
+| 🌐 DNS & reputation | MX, SPF, DKIM, DMARC, PTR and common DNSBL checks |
+| 🔐 Security | Fail2Ban, brute-force signals, SSH posture and open-relay protection |
+| 🔒 TLS | SMTP, IMAPS and HTTPS certificates, expiry and STARTTLS |
+| 🖥️ Host health | Postfix/Dovecot/Nginx services, disk, inodes, mailboxes and backup freshness |
+
+## 📦 Optional global install
+
+```bash
+sudo ./install.sh
+sudo miab-radar
 ```
+
+The installer copies the executable to `/usr/local/bin/miab-radar`.
+
+## ⏱️ Automation
+
+Example cron entry for a 30-minute health snapshot:
+
+```cron
 */30 * * * * /usr/local/bin/miab-radar > /var/log/miab-radar.log
 ```
 
----
+For automation, consume the exit code and preserve the full report for diagnosis.
 
 ## Exit Codes
 
-| Code | Meaning                  |
-| ---- | ------------------------ |
-| 0    | All checks passed        |
-| 1    | Warnings present         |
-| 2    | Critical issues detected |
-
----
-
-## Why miab-radar
-
-Mail-in-a-Box provides only surface-level diagnostics.
-
-miab-radar adds:
-
-* deep log analysis
-* deliverability troubleshooting
-* security auditing
-* precise, actionable fixes
-
-This makes it suitable for **production environments**, not just hobby setups.
-
----
-
-## Architecture Philosophy
-
-miab-radar follows a simple but powerful model:
-
-* Bash → deterministic checks
-* Logs → source of truth
-* Output → actionable insights
-
-No heavy dependencies. No agents. No overhead.
-
----
+| Code | Meaning |
+|---:|---|
+| `0` | All checks passed |
+| `1` | Warnings are present |
+| `2` | Critical findings detected |
 
 ## Requirements
 
-* Ubuntu / Debian
-* Root access
-* Mail-in-a-Box installed
+- Mail-in-a-Box on Ubuntu/Debian
+- Bash 4+
+- Root privileges for full logs and service visibility
+- Standard system and DNS utilities used by Mail-in-a-Box
 
----
+## Project philosophy
 
-## Roadmap
+- **Bash:** deterministic, inspectable checks
+- **Logs:** the source of truth for mail flow
+- **Output:** concise findings with next actions
+- **Overhead:** no agents, database or heavy runtime
 
-* JSON output mode (for integrations)
-* Telegram / Slack alerts
-* Prometheus exporter
-* Historical metrics tracking
-* AI-based anomaly detection
+## Related tools
 
----
-
-## Contributing
-
-Pull requests are welcome.
-
-Guidelines:
-
-* keep it simple
-* keep it readable
-* avoid unnecessary dependencies
-* focus on real-world usefulness
-
----
+- [mail-sec-audit](https://github.com/Anton-Babaskin/mail-sec-audit) — broad security posture across different Linux mail stacks.
+- [smtp-egress-audit](https://github.com/Anton-Babaskin/smtp-egress-audit) — focused attribution of abnormal outbound SMTP connections.
+- [mail_analyzer.sh](https://github.com/Anton-Babaskin/mail_analyzer.sh) — deeper Postfix log statistics.
 
 ## License
 
-MIT License
-
----
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
 Anton Babaskin
-
----
-
-## Final Note
-
-If you run your own mail server — you need visibility.
-
-miab-radar gives you exactly that.
