@@ -1,0 +1,10 @@
+* text=auto
+*.py text eol=lf
+*.sh text eol=lf
+mail-radar text eol=lf
+miab-radar text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.log text eol=lf
+*.txt text eol=lf
+.gitignore text eol=lf
