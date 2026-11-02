@@ -1,0 +1,6 @@
+2026-11-02T13:25:33+04:00 box.local.example postfix/smtpd[121]: B830110601A4: client=mx08.gateway.example[192.0.2.96]
+2026-11-02T13:25:34+04:00 box.local.example postfix/cleanup[122]: B830110601A4: message-id=<incident.1@sender.example>
+2026-11-02T13:25:34+04:00 box.local.example postfix/qmgr[123]: B830110601A4: from=<noreply@sender.example>, size=2145, nrcpt=1 (queue active)
+2026-11-02T13:25:36+04:00 box.local.example postfix/lmtp[124]: B830110601A4: to=<office@local.example>, relay=box.local.example[private/dovecot-lmtp], delay=2.9, delays=0.55/0.01/0.04/2.3, dsn=2.0.0, status=sent (250 2.0.0 <office@local.example> Saved)
+Nov 02 13:25:36 lmtp(office@local.example)<124><session>: Info: msgid=<incident.1@sender.example>: saved mail to INBOX
+2026-11-02T13:25:36+04:00 box.local.example postfix/qmgr[123]: B830110601A4: removed
