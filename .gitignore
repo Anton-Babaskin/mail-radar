@@ -6,3 +6,4 @@
 !examples/mail.log
 __pycache__/
 *.py[cod]
+.ruff_cache/

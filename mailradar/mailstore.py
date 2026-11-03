@@ -1,27 +1,39 @@
 """Targeted Dovecot metadata adapter; message bodies are never requested."""
 import json
+import math
 import os
 import re
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from .model import finding
 
-FIELDS = "mailbox uid guid date.received date.saved hdr.date hdr.received hdr.message-id flags"
+FIELDS = "mailbox uid guid date.received date.saved date.received.unixtime date.saved.unixtime hdr.date hdr.received hdr.message-id flags"
 
 
 def header_delays(record):
     """Date and external Received are untrusted clocks, not attribution."""
     try:
-        sent = parsedate_to_datetime(record.get("hdr.date", ""))
-        headers = record.get("hdr.received", "")
-        headers = headers if isinstance(headers, list) else headers.split("\nReceived:")
-        received = [parsedate_to_datetime(h.rsplit(";", 1)[-1].strip()) for h in headers if ";" in h]
+        date = record.get("hdr.date")
+        if not isinstance(date,str):
+            raise ValueError("Date is absent or not text")
+        sent = parsedate_to_datetime(date)
+        headers = record.get("hdr.received") or ""
+        headers = headers if isinstance(headers, list) else re.split(r"\r?\n(?=\S)",headers) if isinstance(headers,str) else []
+        received = []
+        for header in headers:
+            if isinstance(header,str) and ";" in header:
+                try:
+                    stamp = parsedate_to_datetime(header.rsplit(";",1)[-1].strip())
+                    if stamp.tzinfo:
+                        received.append(stamp)
+                except (TypeError, ValueError, IndexError, OverflowError):
+                    pass
         if sent.tzinfo and received and all(t.tzinfo for t in received):
             return {"date_to_earliest_received_seconds": (min(received)-sent).total_seconds(), "limitation": "Sender Date/external Received clocks are untrusted; no cause or greylisting attribution follows from this interval."}
-    except (TypeError, ValueError, IndexError, OverflowError):
+    except (TypeError, ValueError, IndexError, OverflowError, AttributeError):
         pass
     return {"limitation": "A comparable Date and Received timestamp pair is unavailable."}
 
@@ -42,24 +54,51 @@ def collect_mailstore(runner, args, since, until):
     quota = runner.run(["doveadm", "quota", "get", "-u", user])
     percentages = [int(m[1]) for m in re.finditer(r"\s(\d{1,4})\s*$", quota.stdout, re.M)] if quota.ok else []
     findings.append(finding("mailstore.quota", "FAIL" if any(n >= 100 for n in percentages) else "WARN" if any(n >= 90 for n in percentages) else "OK" if percentages else "UNKNOWN", "Квота Dovecot (не размер du)", evidence=[dict(output=quota.stdout if quota.ok else quota.stderr, returncode=quota.returncode)], next_step="Если quota plugin недоступен, проверьте его конфигурацию отдельно."))
-    query = ["SINCE", since.strftime("%Y-%m-%d"), "BEFORE", (until+timedelta(days=1)).strftime("%Y-%m-%d")]
+    # Search dates are interpreted in the server timezone by Dovecot, not the
+    # administrator's selected display zone. Epoch fields refine this broad
+    # candidate query to the exact UTC interval below.
+    from .timeutil import local_zone
+    server_zone = local_zone()
+    local_since, local_until = since.astimezone(server_zone), until.astimezone(server_zone)
+    upper_date = local_until.date() + (timedelta(days=1) if local_until.time().replace(tzinfo=None) != datetime.min.time() else timedelta())
+    query = ["SINCE", local_since.date().isoformat(), "BEFORE", upper_date.isoformat()]
     message_id = args.headers or (args.trace if args.trace and args.trace.startswith("<") else None)
     if message_id:
         query += ["HEADER", "Message-ID", message_id]
     result = runner.run(["doveadm", "-f", "json", "fetch", "-u", user, FIELDS] + query, timeout=15)
     records = []
+    omitted = 0
+    uncertain_time = False
     if result.ok:
         try:
-            decoded = json.loads(result.stdout)
+            def nonfinite(value):
+                raise ValueError("Non-finite Dovecot JSON")
+            decoded = json.loads(result.stdout,parse_constant=nonfinite)
             if isinstance(decoded, list) and all(isinstance(r, dict) for r in decoded):
-                records = [{k: v for k, v in r.items() if k in FIELDS.split()} for r in decoded[:50]]
+                for row in decoded:
+                    if message_id and str(row.get("hdr.message-id","")).strip() != message_id:
+                        continue  # HEADER search is substring based; require exact Message-ID
+                    stamp = row.get("date.received.unixtime")
+                    try:
+                        epoch = float(stamp)
+                        if not math.isfinite(epoch) or epoch<0 or isinstance(stamp,bool):
+                            raise ValueError("invalid epoch")
+                        if not since.timestamp() <= epoch <= until.timestamp():
+                            continue
+                    except (ValueError,TypeError,OverflowError):
+                        uncertain_time = True
+                    if len(records)==50:
+                        omitted += 1
+                        continue
+                    record = {k:v for k,v in row.items() if k in FIELDS.split()}
+                    records.append(record)
             else:
                 raise ValueError("Unsupported Dovecot JSON shape")
         except (ValueError, TypeError):
             result.returncode = 65
     for record in records:
         record["header_intervals"] = header_delays(record)
-    findings.append(finding("mailstore.metadata", "UNKNOWN" if result.truncated or len(records) == 50 else "OK" if records and message_id else "WARN" if records else "UNKNOWN", "Текущая папка и даты выбранного Message-ID" if records and message_id else "Кандидаты по получателю и периоду; нужное письмо не идентифицировано" if records else "Сохранённое письмо в выбранном поиске не подтверждено", evidence=records, next_step="Сопоставьте дату, Message-ID и получателя. Текущая папка не доказывает исходную папку или причину перемещения.", returncode=result.returncode, truncated=result.truncated or len(records) == 50, limitation="Date-only Dovecot query includes entire boundary days. Without Message-ID these are candidate messages only; envelope sender filters are not header From. Metadata reads may refresh indexes; flags/messages are not changed. No matches does not prove non-delivery.", error=result.stderr))
+    findings.append(finding("mailstore.metadata", "UNKNOWN" if result.truncated or omitted or uncertain_time or not result.ok else "OK" if records and message_id else "WARN" if records else "UNKNOWN", "Текущая папка и даты выбранного Message-ID" if records and message_id else "Кандидаты по получателю и периоду; нужное письмо не идентифицировано" if records else "Сохранённое письмо в выбранном поиске не подтверждено", evidence=records, next_step="Сопоставьте дату, Message-ID и получателя. Текущая папка не доказывает исходную папку или причину перемещения.", returncode=result.returncode, truncated=bool(result.truncated or omitted), omitted_records=omitted, precise_time_confirmed=not uncertain_time, limitation="Epoch received dates refine the server-local date query. Missing epoch dates leave candidate timing UNKNOWN. Without Message-ID these are candidate messages only; envelope sender filters are not header From. Metadata reads may refresh indexes; flags/messages are not changed. No matches does not prove non-delivery.", error=result.stderr))
     if args.deep:
         findings.append(physical_usage(args.root, user))
     return findings

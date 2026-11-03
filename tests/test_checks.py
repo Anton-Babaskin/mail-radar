@@ -342,6 +342,89 @@ class ChecksTests(unittest.TestCase):
         checks._dnsbl(ctx, target, "domain")
         self.assertEqual(self.find(ctx, "DNSBL.DOMAIN")[0]["status"], "UNKNOWN")
 
+    def test_spamhaus_error_codes_are_named_and_never_listed(self):
+        for kind in ("ip", "domain"):
+            for code, outcome in (("252", "zone_name_error"), ("254", "public_resolver_blocked"), ("255", "query_limit_exceeded")):
+                with self.subTest(kind=kind, code=code):
+                    self.assertEqual(checks.dnsbl_state("NOERROR", ["127.255.255." + code], kind), ("UNKNOWN", outcome))
+        self.assertEqual(checks.dnsbl_state("NOERROR", ["127.0.1.255"], "domain"), ("UNKNOWN", "ip_query_on_domain_list"))
+        self.assertEqual(checks.dnsbl_state("NOERROR", ["127.0.1.255"], "ip")[1], "service_or_unrecognized_response")
+        self.assertEqual(checks.dnsbl_state("NOERROR", ["127.0.0.2", "127.255.255.254"], "ip"), ("UNKNOWN", "mixed_error_response"))
+        self.assertEqual(checks.dnsbl_state("NOERROR", ["127.255.255.253"], "ip")[1], "service_or_unrecognized_response")
+        self.assertEqual(checks.dnsbl_state("NOERROR", ["127.0.0.2", "127.0.0.4", "127.0.0.10"], "ip"), ("WARN", "listed"))
+
+    def test_public_resolver_refusal_is_a_confirmed_control_warning(self):
+        ctx = self.context()
+        ctx.runner.default = Result(stdout=";; status: NOERROR\nx. 60 IN A 127.255.255.254\n")
+        checks._dnsbl(ctx, "2.100.51.198.zen.spamhaus.org", "ip", family=4)
+        target = self.find(ctx, "DNSBL.IP")[0]
+        self.assertEqual((target["status"], target["details"]["outcome"]), ("UNKNOWN", "public_resolver_blocked"))
+        self.assertIn("127.255.255.254", target["next_step"])
+        control = self.find(ctx, "DNSBL.CONTROL.IP")[0]
+        self.assertEqual(control["status"], "WARN")
+        self.assertEqual(control["details"]["operator_error"], "public_resolver_blocked")
+        self.assertIn("bind9", control["next_step"])
+        self.assertFalse(control["details"]["positive_ok"])
+
+    def test_rate_limited_target_with_passing_controls_stays_unknown(self):
+        positive, negative = "2.0.0.127.zen.spamhaus.org", "1.0.0.127.zen.spamhaus.org"
+        target = "2.100.51.198.zen.spamhaus.org"
+        responses = {tuple(checks._dig(positive, "A")): Result(stdout=";; status: NOERROR\n" + positive + ". 60 IN A 127.0.0.2\n"),
+                     tuple(checks._dig(negative, "A")): Result(stdout=";; status: NXDOMAIN\n"),
+                     tuple(checks._dig(target, "A")): Result(stdout=";; status: NOERROR\n" + target + ". 60 IN A 127.255.255.255\n")}
+        ctx = self.context(responses)
+        checks._dnsbl(ctx, target, "ip", family=4)
+        self.assertEqual(self.find(ctx, "DNSBL.CONTROL.IP")[0]["status"], "OK")
+        item = self.find(ctx, "DNSBL.IP")[0]
+        self.assertEqual((item["status"], item["details"]["outcome"]), ("UNKNOWN", "query_limit_exceeded"))
+        self.assertTrue(item["details"]["operational_controls_passed"])
+
+    def test_postfix_reply_filter_syntax(self):
+        cases = (("127.0.0.[2..11]", "127.0.0.10", True), ("127.0.0.[2..11]", "127.255.255.254", False),
+                 ("127.0.0.[2;4;9..11]", "127.0.0.4", True), ("127.0.0.[2;4;9..11]", "127.0.0.5", False),
+                 ("127.0.1.[2..99]", "127.0.1.255", False), ("127.[0..255].[0..255].[0..255]", "127.255.255.255", True),
+                 ("127.0.0.2", "127.0.0.2", True), ("127.0.0.[x]", "127.0.0.2", None), ("127.0.0", "127.0.0.2", None),
+                 ("127.0.0.[2...4]", "127.0.0.2", None))
+        for pattern, address, expected in cases:
+            with self.subTest(pattern=pattern, address=address):
+                self.assertIs(checks.rbl_filter_matches(pattern, address), expected)
+
+    def test_unfiltered_spamhaus_zone_in_postfix_would_reject_on_error_codes(self):
+        chain = ("permit_sasl_authenticated, reject_rbl_client zen.spamhaus.org, "
+                 "reject_rbl_client bl.example.net, reject_unlisted_recipient")
+        responses = self.base_postfix(smtpd_recipient_restrictions=chain,
+                                      smtpd_sender_restrictions="reject_rhsbl_sender dbl.spamhaus.org=127.0.1.[2..255]")
+        responses[("postconf", "-P")] = Result(stdout="submission/inet/smtpd_recipient_restrictions = " + chain + "\n")
+        ctx = self.context(responses)
+        checks.dnsbl_filter_checks(ctx, checks.postfix_checks(ctx))
+        items = {f["details"].get("zone"): f for f in self.find(ctx, "DNSBL.POSTFIX_FILTER")}
+        self.assertEqual(set(items), {"zen.spamhaus.org", "dbl.spamhaus.org"})
+        zen = items["zen.spamhaus.org"]
+        self.assertEqual(zen["status"], "WARN")
+        self.assertEqual(zen["details"]["error_codes_accepted"], ["127.255.255.252", "127.255.255.254", "127.255.255.255"])
+        self.assertEqual(zen["details"]["contexts"], ["global/smtpd_recipient_restrictions", "submission/inet/smtpd_recipient_restrictions"])
+        self.assertEqual(items["dbl.spamhaus.org"]["details"]["error_codes_accepted"], ["127.0.1.255"])
+
+    def test_miab_reply_filters_pass_and_unfiltered_dqs_errors_are_flagged(self):
+        responses = self.base_postfix(
+            smtpd_sender_restrictions="reject_non_fqdn_sender, reject_rhsbl_sender dbl.spamhaus.org=127.0.1.[2..99]",
+            smtpd_recipient_restrictions="permit_sasl_authenticated, reject_rbl_client zen.spamhaus.org=127.0.0.[2..11], "
+                                         "reject_rbl_client abcdefghijk123456789.zen.dq.spamhaus.net")
+        ctx = self.context(responses)
+        checks.dnsbl_filter_checks(ctx, checks.postfix_checks(ctx))
+        items = self.find(ctx, "DNSBL.POSTFIX_FILTER")
+        self.assertEqual({f["details"]["zone"]: f["status"] for f in items},
+                         {"zen.spamhaus.org": "OK", "dbl.spamhaus.org": "OK", "[DQS-key].zen.dq.spamhaus.net": "WARN"})
+        self.assertNotIn("abcdefghijk123456789", json.dumps(ctx.findings))
+
+    def test_postfix_filter_without_spamhaus_or_readable_chains(self):
+        ctx = self.context(self.base_postfix(smtpd_recipient_restrictions="reject_rbl_client bl.example.net"))
+        checks.dnsbl_filter_checks(ctx, checks.postfix_checks(ctx))
+        self.assertEqual([f["status"] for f in self.find(ctx, "DNSBL.POSTFIX_FILTER")], ["N/A"])
+        ctx = self.context()
+        checks.dnsbl_filter_checks(ctx, checks.postfix_checks(ctx))
+        self.assertEqual([f["status"] for f in self.find(ctx, "DNSBL.POSTFIX_FILTER")], ["UNKNOWN"])
+
     def test_postfix_chroot_resolver_is_checked_separately(self):
         self.write("/etc/resolv.conf", "nameserver 127.0.0.1\n")
         self.write("/var/spool/postfix/etc/resolv.conf", "nameserver 127.0.0.2\n")

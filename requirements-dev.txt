@@ -1,0 +1,2 @@
+# Development only; MailRadar itself has no pip dependencies.
+ruff==0.14.10

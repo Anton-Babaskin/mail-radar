@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import __version__
 from .model import clean, finding, finish_report, redact_report, write_private
 from .runner import Runner, valid_user
+from .display import human
+from .timeutil import local_zone, timestamp
 
 
 def parser():
@@ -52,59 +54,59 @@ def parser():
     p.add_argument("--json", action="store_true", help="JSON; watch выводит NDJSON")
     p.add_argument("--report", metavar="NEW_PATH", help="новый приватный JSON-файл, без перезаписи")
     p.add_argument("--redact", action="store_true", help="заменить адреса/IP/домены в экспортируемом отчёте")
+    p.add_argument("--details", action="store_true", help="подробные проверки и строки доказательств")
+    p.add_argument("--menu", action="store_true", help="интерактивная сессия с возвратом в меню")
     p.add_argument("--no-color", action="store_true", help="совместимость: вывод всегда без ANSI")
     p.add_argument("--version", action="version", version="MailRadar "+__version__)
     return p
 
 
-def local_zone():
-    for source in ("/etc/timezone",):
-        try:
-            return ZoneInfo(Path(source).read_text().strip())
-        except (OSError, ValueError, ZoneInfoNotFoundError):
-            pass
-    try:
-        name = str(Path("/etc/localtime").resolve()).split("/zoneinfo/", 1)[1]
-        return ZoneInfo(name)
-    except (IndexError, OSError, ZoneInfoNotFoundError):
-        return datetime.now().astimezone().tzinfo
-
-
-def timestamp(value, zone):
-    result = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if result.tzinfo is None:
-        # Explicitly reject ambiguous or skipped wall-clock times; require an offset.
-        first, second = result.replace(tzinfo=zone, fold=0), result.replace(tzinfo=zone, fold=1)
-        if first.utcoffset() != second.utcoffset():
-            raise ValueError("Неоднозначное/несуществующее локальное время: укажите UTC offset")
-        result = first
-    return result.astimezone(timezone.utc)
-
-
 def menu(args):
-    choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "diagnose"), ("Исходящее не дошло", "diagnose"), ("Задержка письма", "diagnose"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь и SMTP-отказы", "doctor"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS/TLS/resolver/relay", "doctor"), ("Место/квота/аккаунт", "mailboxes"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch")]
-    print("MailRadar — выберите задачу:")
+    choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "diagnose"), ("Исходящее не дошло", "diagnose"), ("Задержка письма", "diagnose"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь и SMTP-отказы", "doctor"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS/TLS/resolver/relay", "doctor"), ("Место/квота/аккаунт", "mailboxes"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch"), ("Поиск по Message-ID / Queue ID / домену", "trace"), ("Заголовки и текущая папка письма", "headers")]
+    print("\nMailRadar — выберите задачу:")
     for number, (label, _) in enumerate(choices, 1):
         print("%2d. %s" % (number, label))
-    choice = input("Номер [1]: ").strip() or "1"
-    if not choice.isdigit() or not 1 <= int(choice) <= len(choices):
-        raise ValueError("Неизвестный номер")
+    print(" 0. Выход")
+    while True:
+        choice = input("Номер [1]: ").strip().lower() or "1"
+        if choice in ("0", "q", "quit", "exit", "выход"):
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(choices):
+            break
+        print("Введите номер от 0 до %d." % len(choices))
     args.mode = choices[int(choice)-1][1]
+    args.trace = args.headers = None
     if args.mode in ("diagnose", "watch", "greylist"):
         args.sender = input("Отправитель (если известен): ").strip() or None
         args.to = input("Получатель (если известен): ").strip() or None
-        args.hours = float(input("Период в часах [24]: ").strip() or "24")
-        args.since = input("Начало ISO 8601 с offset (необязательно): ").strip() or None
-    if args.mode == "mailboxes":
+    if args.mode == "trace":
+        args.trace = input("Message-ID, Queue ID, адрес, домен или IP: ").strip()
+        if not args.trace:
+            raise ValueError("Для поиска нужно указать известный идентификатор или адрес")
+    if args.mode in ("mailboxes", "headers"):
         args.user = input("Локальный адрес: ").strip()
+        if not valid_user(args.user):
+            raise ValueError("Нужен один корректный локальный адрес")
+        if args.mode == "headers":
+            args.headers = input("Message-ID: ").strip()
+            if not args.headers:
+                raise ValueError("Укажите Message-ID письма")
+        else:
+            args.headers = input("Message-ID (если известен, иначе поиск за период): ").strip() or None
+    if args.mode in ("diagnose", "watch", "greylist", "trace", "mailboxes", "headers"):
+        args.hours = float(input("Период в часах [24]: ").strip() or "24")
+        args.timezone = input("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
+        args.since = input("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
+    if args.mode == "watch":
+        args.seconds = float(input("Наблюдать секунд [180]: ").strip() or "180")
     if args.mode == "whitelist":
         args.client_name = input("Имя SMTP-клиента (если известно): ").strip() or None
         args.client_ip = input("IP SMTP-клиента (если известен): ").strip() or None
     if int(choice) == 9:
-        args.domain = input("Проверяемый домен: ").strip() or None
-        args.network = input("Выполнить DNS/TLS-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
+        args.domain = input("Проверяемый домен (пусто — домен сервера): ").strip() or None
+    if int(choice) == 9 or args.mode == "post-update":
+        args.network = input("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
     return args
-
 
 def validate(p, args):
     for field in ("sender", "to", "user"):
@@ -113,6 +115,13 @@ def validate(p, args):
             p.error("Некорректный адрес: --"+("from" if field == "sender" else field))
     for field in ("domain", "client_name", "dkim_selector"):
         value = getattr(args, field)
+        if value and field == "domain":
+            try:
+                ipaddress.ip_address(value.rstrip("."))
+            except ValueError:
+                pass
+            else:
+                p.error("--domain принимает доменное имя; для IP используйте --ip")
         if value and (len(value) > 253 or not re.fullmatch(r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?", value)):
             p.error("Некорректное имя: --"+field.replace("_", "-"))
     for field in ("ip", "client_ip", "peer"):
@@ -141,32 +150,13 @@ def validate(p, args):
     return hours
 
 
-def human(report):
-    print("MailRadar %s — %s" % (__version__, report["summary"]["status"]))
-    print("Период: %s — %s; фильтры: %s" % (report["window"]["since"], report["window"]["until"], json.dumps(report["filters"], ensure_ascii=False)))
-    for conclusion in report.get("conclusions", [])[:10]:
-        print("[%s] %s" % (conclusion["status"], conclusion["title"]))
-        for item in conclusion.get("evidence", [])[:1]:
-            print("  Подтверждение: " + clean(json.dumps(item, ensure_ascii=False), 1500))
-        if conclusion.get("next_step"):
-            print("  Далее: " + conclusion["next_step"])
-    order = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "OK": 3, "N/A": 4}
-    for f in sorted(report["findings"], key=lambda f: order[f["status"]]):
-        print("[%s] %s (%s)" % (f["status"], f["title"], f["id"]))
-        for e in f.get("evidence", [])[:3]:
-            print("  " + clean(json.dumps(e, ensure_ascii=False) if not isinstance(e, str) else e, 1200).replace("\n", "\n  "))
-        if f.get("next_step"):
-            print("  Далее: " + f["next_step"])
-    stats = report.get("statistics", {})
-    if stats:
-        print("Статистика: " + json.dumps(stats, ensure_ascii=False))
-    print("Доказательства заканчиваются наблюдаемыми источниками. SMTP 250 не подтверждает внешний INBOX; Saved не доказывает текущую папку.")
-    if report.get("redaction"):
-        print("Redaction: " + report["redaction"]["limits"])
-
-
 def default_logs():
-    return sorted(set(glob.glob("/var/log/mail.log*") + glob.glob("/var/log/maillog*")))
+    paths = set(glob.glob("/var/log/mail.log*") + glob.glob("/var/log/maillog*"))
+    def priority(path):
+        m = re.search(r"\.(\d+)(?:\.(?:gz|bz2|xz|lzma))?$",path)
+        number = int(m[1]) if m else 0
+        return (2,-number,path) if m and len(m[1])==8 else (1,number,path) if m else (0,0,path)
+    return sorted(paths,key=priority)
 
 
 def source_labels(value, mapping):
@@ -192,6 +182,7 @@ def conclusions(report, recipient=None):
         "expired": ("FAIL", "истёк срок жизни очереди"),
         "hold": ("WARN", "очередь удерживается"),
         "accepted": ("UNKNOWN", "принято в очередь; последующая доставка не подтверждена"),
+        "discarded": ("WARN", "транспорт discard подтвердил удаление; это не сохранение в ящик"),
         "unknown": ("UNKNOWN", "исход не установлен по доступным данным"),
     }
     answers = []
@@ -228,7 +219,8 @@ def analyze(args, runner, since, until, paths):
     from .checks import collect_checks
     from .mailstore import collect_mailstore
     filters = {k: v for k, v in {"from": args.sender, "to": args.to, "domain": args.domain, "ip": args.ip, "trace": args.trace, "message_id": args.headers}.items() if v}
-    logs = analyze_logs(paths, since, until, timezone=args.timezone, year=args.year, filters=filters, max_bytes=args.max_bytes, max_lines=args.max_lines)
+    logs = analyze_logs(paths, since, until, timezone=args.timezone, year=args.year, filters=filters, max_bytes=args.max_bytes, max_lines=args.max_lines, recent=getattr(args,"recent_logs",False))
+    logs["completeness"]["log_sources_complete"] = logs["completeness"]["complete"]
     report = dict(schema_version="1.0", tool=dict(name="MailRadar", version=__version__), mode=args.mode, window=dict(since=since.isoformat(), until=until.isoformat(), timezone=args.timezone, year=args.year), filters=filters, **logs)
     for item in report["findings"]:
         item.setdefault("window", report["window"])
@@ -252,6 +244,7 @@ def analyze(args, runner, since, until, paths):
     if args.mode in ("diagnose", "trace", "headers", "mailboxes", "watch", "greylist"):
         report["conclusions"] = conclusions(report, args.to or args.user)
     if any(f["status"] == "UNKNOWN" for f in report["findings"]):
+        report["completeness"]["checks_complete"] = False
         report["completeness"]["complete"] = False
         report["completeness"].setdefault("limitations", []).append("One or more checks lack evidence; see UNKNOWN findings.")
     report = finish_report(report)
@@ -299,8 +292,8 @@ def watch(args, runner, since, until, paths, interrupted):
         for name in paths:
             try:
                 attach(name, at_end=True)
-            except OSError:
-                gap("Watch source missing or unreadable at start")
+            except (OSError,ValueError):
+                gap("Watch source missing, unreadable or not a regular file at start")
         emit("watch_started", seconds=args.seconds, limitations="Rotation/truncation races may lose events; finish with trace over retained logs.")
         try:
             while time.monotonic() < end and not interrupted[0]:
@@ -366,26 +359,15 @@ def watch(args, runner, since, until, paths, interrupted):
         if interrupted[0] or limitations:
             report["completeness"]["complete"] = False
             report["findings"].append(finding("watch.incomplete", "UNKNOWN", "Наблюдение прервано или содержит пробелы", evidence=limitations))
-        report["watch"] = dict(elapsed_seconds=round(time.monotonic()-started, 2), interrupted=bool(interrupted[0]), reason="signal" if interrupted[0] else "duration_or_limit")
+        report["watch"] = dict(elapsed_seconds=round(time.monotonic()-started, 2), interrupted=bool(interrupted[0]), bytes_observed=total, reason="signal" if interrupted[0] else "duration_or_limit")
         report = finish_report(report)
         if args.redact:
             report = redact_report(report)
-        if args.json:
-            emit("report", report=report)
-        else:
-            human(report)
-        emit("watch_finished", interrupted=bool(interrupted[0]), bytes_observed=total)
         return report
 
 
-def main(argv=None):
-    p = parser()
-    raw = list(sys.argv[1:] if argv is None else argv)
-    args = p.parse_args(raw)
-    args.root = "/"  # testable collectors accept a separate fixture root directly
+def _run_once(args, p):
     try:
-        if not raw and sys.stdin.isatty() and sys.stdout.isatty():
-            args = menu(args)
         args.mode = "trace" if args.trace else "headers" if args.headers else args.mode or "doctor"
         hours = validate(p, args)
         zone = local_zone() if args.timezone == "local" else ZoneInfo(args.timezone)
@@ -405,7 +387,10 @@ def main(argv=None):
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, stop)
     try:
+        if args.report and os.path.lexists(args.report):
+            raise FileExistsError("Файл отчёта уже существует: "+args.report)
         with tempfile.TemporaryDirectory(prefix="mail-radar-") as scratch:
+            args.recent_logs = not args.log and not args.offline
             paths = args.log or ([] if args.offline else default_logs())
             labels = {}
             if "-" in paths:
@@ -420,9 +405,11 @@ def main(argv=None):
                 stdin_truncated = False
             journal_result = None
             if args.journal:
-                journal_result = runner.run(["journalctl", "--no-pager", "-o", "short-iso-precise", "--since", since.isoformat(), "--until", until.isoformat(), "-u", "postfix", "-u", "dovecot", "-u", "postgrey"], timeout=15)
+                journal_result = runner.run(["journalctl", "--no-pager", "-o", "short-iso-precise", "--reverse", "--since", (since-timedelta(hours=24)).isoformat(), "--until", until.isoformat(), "-u", "postfix", "-u", "postfix@*.service", "-u", "dovecot", "-u", "postgrey"], timeout=15)
                 path = Path(scratch)/"journal.log"
-                path.write_text(journal_result.stdout, encoding="utf-8")
+                # Capture newest first under the runner's byte cap, restore
+                # source order for equal timestamps before event correlation.
+                path.write_text("\n".join(reversed(journal_result.stdout.splitlines()))+"\n", encoding="utf-8")
                 os.chmod(path, 0o600)
                 paths.append(str(path))
                 labels[str(path)] = "journal:postfix,dovecot,postgrey"
@@ -439,12 +426,17 @@ def main(argv=None):
                     report = finish_report(report)
                 if args.redact:
                     report = redact_report(report)
-                if args.json:
-                    print(json.dumps(report, ensure_ascii=False))
-                else:
-                    human(report)
             if args.report:
                 write_private(args.report, json.dumps(report, ensure_ascii=False, indent=2)+"\n")
+            if args.mode == "watch" and args.json:
+                print(json.dumps(dict(type="report",report=report),ensure_ascii=False),flush=True)
+                print(json.dumps(dict(type="watch_finished",interrupted=bool(interrupted[0]),bytes_observed=report["watch"]["bytes_observed"])),flush=True)
+            elif args.json:
+                print(json.dumps(report,ensure_ascii=False))
+            else:
+                human(report,details=args.details)
+                if args.report:
+                    print("Приватный отчёт сохранён: "+clean(args.report))
             return 130 if interrupted[0] else report["summary"]["exit_code"]
     except KeyboardInterrupt:
         report = finish_report(dict(mode=args.mode, findings=[finding("run.interrupted", "UNKNOWN", "Диагностика прервана сигналом; результат неполный")], completeness=dict(complete=False)))
@@ -459,6 +451,47 @@ def main(argv=None):
         return 3
     finally:
         runner.close()
+
+
+def main(argv=None):
+    p = parser()
+    raw = list(sys.argv[1:] if argv is None else argv)
+    args = p.parse_args(raw)
+    args.root = "/"
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    interactive = args.menu or not raw and tty
+    if args.menu and not tty:
+        p.error("--menu требует интерактивный терминал; для автоматизации используйте CLI-флаги")
+    if interactive and args.json:
+        p.error("--menu и --json несовместимы")
+    if not interactive:
+        return _run_once(args, p)
+    last_code = 0
+    def menu_error(message):
+        raise ValueError(message)
+    p.error = menu_error
+    try:
+        while True:
+            try:
+                selected = menu(copy.deepcopy(args))
+                if selected is None:
+                    return last_code
+                last_code = _run_once(selected, p)
+            except (ValueError, ZoneInfoNotFoundError) as error:
+                print("Ошибка ввода: " + clean(error))
+            except SystemExit as error:
+                if error.code not in (2,3):
+                    raise
+                last_code = error.code
+            again = input("\nEnter — вернуться в меню; 0 — выход: ").strip().lower()
+            if again in ("0","q","quit","exit","выход"):
+                return last_code
+            args.report = None  # an explicit create-once report path applies to the first run
+    except EOFError:
+        return last_code
+    except KeyboardInterrupt:
+        print("\nСессия завершена.")
+        return 130
 
 
 if __name__ == "__main__":

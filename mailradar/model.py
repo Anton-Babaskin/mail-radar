@@ -2,6 +2,7 @@
 import copy
 import ipaddress
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ def clean(value, limit=4000):
     value = "".join(c for c in value if c in "\n\t" or (ord(c) >= 32 and not 127 <= ord(c) <= 159 and c not in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"))
     value = re.sub(r"(?i)\b(password|passwd|secret_key|api[_-]?token|authorization)\s*[=:]\s*[^\s,;]+", r"\1=[REDACTED]", value)
     value = re.sub(r"(://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@", value)
+    value = re.sub(r"(?i)\b[a-z0-9_-]+\.(?=[a-z0-9_-]+\.dq\.spamhaus\.net\b)","[DQS-key].",value)
     return value[:limit] + ("…[truncated]" if len(value) > limit else "")
 
 
@@ -25,6 +27,8 @@ def finding(identifier, status, title, evidence=None, next_step="", **details):
 
 
 def sanitize(value):
+    if isinstance(value,float) and not math.isfinite(value):
+        return None
     if isinstance(value, str):
         return clean(value)
     if isinstance(value, dict):
@@ -56,7 +60,8 @@ def finish_report(report):
                       findings=[{k: f.get(k, "") for k in ("id", "status", "title", "next_step")} | {"evidence": [], "details": {"omitted": True}}
                                 for f in report["findings"][:200]],
                       sources=[{k: s[k] for k in ("path", "readable", "truncated") if k in s} for s in report.get("sources", [])[:100]],
-                      completeness=dict(complete=False, limitations=["8 MiB report limit: nested evidence/details/traces omitted. Repeat with narrower filters."]))
+                      completeness=dict(complete=False, limitations=["8 MiB report limit: nested evidence/details/traces omitted. Repeat with narrower filters."]),
+                      **({"redaction":report["redaction"]} if "redaction" in report else {}))
     return report
 
 
@@ -76,10 +81,12 @@ def write_private(path, data):
 
 def redact_report(report):
     aliases = {}
+    counts = {}
     def alias(value, kind):
         key = (kind, value)
         if key not in aliases:
-            aliases[key] = "%s%d" % (kind, 1 + sum(k[0] == kind for k in aliases))
+            counts[kind] = counts.get(kind,0)+1
+            aliases[key] = "%s%d" % (kind, counts[kind])
         return aliases[key]
     def text(value):
         value = re.sub(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}", lambda m: alias(m[0], "address") + "@redacted.example", value)
@@ -103,4 +110,4 @@ def redact_report(report):
         return value
     result = walk(copy.deepcopy(report))
     result["redaction"] = {"applied": True, "limits": "Equality aliases apply within this export only. Review paths, queue IDs, Message-IDs and free text before sharing; anonymity is not guaranteed."}
-    return result
+    return finish_report(result) if "findings" in result and "summary" in result else result

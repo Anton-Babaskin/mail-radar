@@ -20,11 +20,15 @@ bash ./mail-radar --help
 sudo bash ./mail-radar
 ```
 
-В интерактивном терминале запуск без аргументов открывает меню. В cron/pipe или
-при заданных аргументах вопросы не задаются. Обычный обзор читает доступные
+В интерактивном терминале запуск без аргументов открывает сессию меню: после
+отчёта Enter возвращает к выбору, `0` завершает работу. В меню доступны также
+поиск по идентификатору и выбранные заголовки. `--menu` включает такую сессию
+явно, например вместе с `--log`/`--offline`. В cron/pipe вопросы не задаются. Обычный обзор читает доступные
 состояние служб, Postfix, очередь и логи, собирает факты в общем временном окне
 и показывает статусы с evidence и следующими действиями. Без root доступна
-частичная диагностика; недоступные проверки отмечаются UNKNOWN.
+частичная диагностика; недоступные проверки отмечаются UNKNOWN. Обычный
+терминальный отчёт краткий; `--details` раскрывает проверки и строки
+доказательств, `--json` сохраняет машинный контракт без меню.
 
 Четыре обычных сценария администратора:
 
@@ -99,10 +103,17 @@ honoured. For historical syslog without a year, pass `--year` and `--timezone`
 times require an explicit offset. The report lists source and parsing limits.
 
 `--log PATH` is repeatable and supports plain files, gzip, bzip2 and xz; `--log -`
-reads stdin. Without explicit paths, local `mail.log*`/`maillog*` are discovered.
-`--journal` adds bounded journal collection. `--offline` requires explicit logs
+reads stdin. Without explicit paths, local `mail.log*`/`maillog*` are discovered. Automatic
+plain-file scans retain a bounded recent suffix first, with negative line
+numbers counting from EOF. Omitted prefixes are explicitly incomplete context;
+this is not proof of a fully covered interval. Explicit `--log` scans retain
+the caller's forward-source contract.
+`--journal` adds newest-first bounded journal collection (including Debian
+`postfix@*.service` instances and 24 hours of pre-window context). `--offline` requires explicit logs
 and prohibits journal/network commands. `--max-bytes` and `--max-lines` bound
 input; hitting a limit marks results incomplete instead of implying no errors.
+Compressed input files are limited to 128 MiB each; LZMA decoder dictionary
+memory is limited to 64 MiB. A rejected archive is reported as UNKNOWN.
 
 Common anchored Postfix/Postgrey/Dovecot log formats are recognized; unsupported
 delivery grammar marks coverage incomplete. Yearless syslog is interpreted as
@@ -160,7 +171,7 @@ FleetOps compatibility: see [the explicit mapping](docs/integrations.md).
 
 | Exit | Meaning |
 |---:|---|
-| 0 | No FAIL/WARN/UNKNOWN or incomplete mandatory result |
+| 0 | No FAIL/WARN/UNKNOWN or incomplete mandatory result in the observed scope |
 | 1 | Warning, UNKNOWN or incomplete diagnostics |
 | 2 | FAIL findings; also invalid CLI usage (with argument error) |
 | 3 | Runtime/output-file error |
@@ -185,16 +196,31 @@ credential files. They still contain operational identifiers and log evidence.
 paths, Queue IDs, Message-IDs and free text before sharing. It is not guaranteed
 anonymization. No report is sent to Telegram, email or another service.
 
+Routine blocked relay attempts and successful Fail2Ban bans are observations,
+not server-failure findings in a general overview. A matching pre-queue reject
+in a targeted investigation remains WARN. The general external-evidence boundary
+is N/A; missing or truncated required input still produces UNKNOWN/exit 1.
+This changes the previous 4.0.0 behavior where every log report was UNKNOWN.
+
+See [the MIAB production-shape audit](docs/miab-audit-2026-11-03.ru.md) for
+regressions discovered after the initial release and the reviewed overlap with
+PRs #5/#6.
+
 ## Development and evidence
 
 ```bash
+python3 -m pip install -r requirements-dev.txt
+ruff check mailradar tests
 python3 -m unittest discover -s tests -v
 for script in mail-radar miab-radar install.sh; do bash -n "$script"; done
 shellcheck mail-radar miab-radar install.sh
 ```
 
-Tests use synthetic fixtures and fake command results, not live mail servers or
-public DNSBLs. Linux CI covers Python 3.9 and 3.10 on Ubuntu 22.04. A Windows or
+Tests use synthetic fixtures and fake host commands. Two integration cases run
+the real `dig` against an ephemeral loopback DNS server; install `dnsutils` to
+run them locally (CI installs it and checks `dig -v`). No public DNSBL or live
+mail server is contacted. Ruff is a development dependency only.
+Linux CI covers Python 3.9 and 3.10 on Ubuntu 22.04. A Windows or
 Git Bash run alone does not establish Linux support. Actual validation results,
 including checks not run, belong in [validation.md](docs/validation.md).
 

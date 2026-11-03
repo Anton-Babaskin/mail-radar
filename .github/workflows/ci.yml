@@ -24,5 +24,12 @@ jobs:
           done
       - name: ShellCheck
         run: shellcheck mail-radar miab-radar install.sh
+      - name: Development checks and real dig
+        run: |
+          python -m pip install -r requirements-dev.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dnsutils
+          dig -v
+          ruff check mailradar tests
       - name: Fixtures, read-only boundary and staged installation
         run: python -m unittest discover -s tests -v

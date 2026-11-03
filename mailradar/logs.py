@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone as dt_timezone
 import gzip
+import io
 import ipaddress
 import lzma
 import os
@@ -18,17 +19,30 @@ from zoneinfo import ZoneInfo
 UTC = dt_timezone.utc
 MONTHS = {name: i + 1 for i, name in enumerate(
     "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
-ISO = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(.*)$")
+# Fields are built from groups, not datetime.fromisoformat: before Python 3.11
+# it rejects journald <= 252 offsets (+0300) and more than six fraction digits.
+ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?\s+(.*)$")
 SYS = re.compile(r"^(?:(\d{4})\s+)?([A-Z][a-z]{2})\s+(\d{1,2})\s+(?:(\d{4})\s+)?(\d{2}:\d{2}:\d{2})(?:\s+(\d{4}))?\s+(.*)$")
-PROGRAM = re.compile(r"^(?:(?P<host>\S+)\s+)?(?P<program>(?:postfix[^\s/]*/[a-z_]+|postgrey|dovecot|spampd)(?:\[\d+\])?):\s*(?P<body>.*)$")
+# syslog_name may add service levels: MIAB logs submission as postfix/submission/smtpd.
+PROGRAM = re.compile(r"^(?:(?P<host>\S+)\s+)?(?P<program>(?:postfix[^\s/]*(?:/[A-Za-z0-9_.-]+)*/[a-z_]+|postgrey|dovecot|spampd)(?:\[\d+\])?):\s*(?P<body>.*)$")
 STANDALONE = re.compile(r"^(lmtp|lda)\(([^)]+)\)(?:<[^>]*>)*:\s*(?:Info:\s*)?(.*)$")
-QUEUE = re.compile(r"^([A-Za-z0-9]{5,100}):\s+(.*)$")
-ADDRESS = re.compile(r"^[^\s<>;,=\x00-\x1f\x7f-\x9f]{1,320}$")
-DELIVERY = re.compile(
-    r"^to=<([^<>]*)>, (?:orig_to=<([^<>]*)>, )?relay=([^,\s]+), "
-    r"(?:conn_use=\d+, )?delay=([0-9]+(?:\.[0-9]+)?), "
-    r"delays=([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?)/([0-9]+(?:\.[0-9]+)?), "
+# Postfix mail_queue.h: short IDs are upper-case hex; long IDs use a vowel-free
+# base-52 time (10 chars), 'z', then a base-51 inode without 'z'. Words such as
+# "warning" or "NOQUEUE" are neither.
+SHORT_QID = re.compile(r"[0-9A-F]{5,21}")
+LONG_QID = re.compile(r"[0-9B-DF-HJ-NP-TV-Zb-df-hj-np-tv-z]{10,11}z[0-9B-DF-HJ-NP-TV-Zb-df-hj-np-tv-y]{1,12}")
+ADDRESS = re.compile(r"^[^\s<>;,=\"\x00-\x1f\x7f-\x9f]{1,320}$")
+QUOTED_LOCAL = re.compile(r'^"(?:[^"\\\x00-\x1f\x7f-\x9f]|\\[^\x00-\x1f\x7f-\x9f])*"(?:@[^\s<>;,="@\x00-\x1f\x7f-\x9f]+)?$')
+DELIVERY_TAIL = re.compile(
+    r"^, relay=([^,\s]+), "
+    r"(?:conn_use=\d{1,12}, )?delay=([0-9]{1,12}(?:\.[0-9]{1,9})?), "
+    r"delays=([0-9]{1,12}(?:\.[0-9]{1,9})?)/([0-9]{1,12}(?:\.[0-9]{1,9})?)/([0-9]{1,12}(?:\.[0-9]{1,9})?)/([0-9]{1,12}(?:\.[0-9]{1,9})?), "
     r"dsn=([245]\.\d+\.\d+), status=(sent|deferred|bounced)(?: \((.*)\))?$")
+CLIENT = re.compile(r"client=([^\s\[\]]+)\[([^\]]+)\](?::\d+)?(?:, sasl_method=([^,\s]+), sasl_username=([^,\s]+))?(?:, sasl_sender=.*)?")
+REJECT = re.compile(r"^NOQUEUE: (reject|reject_warning): (\S+) from ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?: ([45]\d\d) (.*)$")
+POLICY_ACTION = re.compile(r"^NOQUEUE: (filter|hold|discard): (\S+) from ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?: (.*)$")
+REJECT_END = re.compile(r"(?:proto=[A-Z]+(?: helo=<[^>]*>)?|helo=<[^>]*>)?")
+NOTIFICATION = re.compile(r"(sender|postmaster) (non-delivery|delivery status|delay) notification: (\S+)")
 DELAYS = ("arrival_to_last_active", "last_active_to_connection_setup",
           "connection_setup", "message_transmission")
 
@@ -113,8 +127,11 @@ def _open_regular(path):
     # Preflight prevents a named pipe/device from turning offline analysis into
     # an indefinitely blocked read. Nonblocking open plus fstat also covers a
     # regular-file-to-FIFO replacement between stat and open.
-    if not stat.S_ISREG(os.stat(path).st_mode):
+    info=os.stat(path)
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError("Log source is not a regular file")
+    if path.endswith((".gz",".bz2",".xz",".lzma")) and info.st_size>128*1024*1024:
+        raise ValueError("Compressed source exceeds 128 MiB input limit")
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -129,7 +146,7 @@ def _open_regular(path):
                 with bz2.BZ2File(raw, "rb") as stream:
                     yield stream
             elif path.endswith((".xz", ".lzma")):
-                with lzma.LZMAFile(raw, "rb") as stream:
+                with io.BufferedReader(_LimitedLZMA(raw)) as stream:
                     yield stream
             else:
                 yield raw
@@ -138,13 +155,72 @@ def _open_regular(path):
             os.close(fd)
 
 
+class _LimitedLZMA(io.RawIOBase):
+    """Bound decoder dictionary memory as well as decompressed output bytes."""
+    def __init__(self, source):
+        super().__init__()
+        self.source = source
+        self.decoder = lzma.LZMADecompressor(memlimit=64*1024*1024)
+        self.pending = b""
+        self.finished = False
+    def readable(self):
+        return True
+    def readinto(self, buffer):
+        if self.finished:
+            return 0
+        while True:
+            if self.decoder.eof:
+                self.pending = self.decoder.unused_data or self.source.read(16384)
+                # XZ permits zero stream padding between concatenated streams.
+                while self.pending and not self.pending.strip(b"\0"):
+                    self.pending = self.source.read(16384)
+                self.pending = self.pending.lstrip(b"\0")
+                if not self.pending:
+                    self.finished=True
+                    return 0
+                self.decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)
+            data = self.pending or self.source.read(16384) if self.decoder.needs_input else b""
+            self.pending=b""
+            if not data and self.decoder.needs_input:
+                raise EOFError("Compressed source ended before end-of-stream marker")
+            result=self.decoder.decompress(data,max_length=len(buffer))
+            if result:
+                buffer[:len(result)]=result
+                return len(result)
+
+
+def _recent_lines(stream, byte_limit, line_limit):
+    """Bounded suffix of a seekable plain file; omitted prefix is explicit."""
+    end = stream.seek(0, 2)
+    start = max(0, end-byte_limit)
+    stream.seek(start)
+    data = stream.read(byte_limit)
+    omitted = start > 0
+    if omitted:
+        data = data.partition(b"\n")[2]  # do not parse a partial first line
+    lines = data.splitlines(keepends=True)
+    if len(lines)>line_limit:
+        lines = lines[-line_limit:]
+        omitted = True
+    return list(zip(range(-1,-len(lines)-1,-1),reversed(lines))), omitted
+
+
 def _timestamp(line, reference, zone, year):
     match = ISO.match(line)
     if match:
-        value = datetime.fromisoformat(match[1].replace("Z", "+00:00"))
-        if value.tzinfo is None:
+        value = datetime(*map(int, match.group(1, 2, 3, 4, 5, 6)), int((match[7] or "")[:6].ljust(6, "0")))
+        offset = match[8]
+        if offset is None:
             value = _local_time(value, zone)
-        return value.astimezone(UTC), match[2], False
+        elif offset == "Z":
+            value = value.replace(tzinfo=UTC)
+        else:
+            hours, minutes = int(offset[1:3]), int(offset[-2:])
+            if hours > 23 or minutes > 59:
+                raise ValueError("Invalid UTC offset")
+            delta = timedelta(hours=hours, minutes=minutes)
+            value = value.replace(tzinfo=dt_timezone(delta if offset[0] == "+" else -delta))
+        return value.astimezone(UTC), match[9], False
     match = SYS.match(line)
     if not match or match[2] not in MONTHS:
         return None
@@ -171,7 +247,102 @@ def _timestamp(line, reference, zone, year):
 
 
 def _address(value, empty=False):
-    return value == "" and empty or bool(ADDRESS.fullmatch(value))
+    if value == "":
+        return empty
+    return len(value) <= 320 and bool(ADDRESS.fullmatch(value) or QUOTED_LOCAL.fullmatch(value))
+
+
+def _queue_id(value):
+    return bool(SHORT_QID.fullmatch(value) or LONG_QID.fullmatch(value))
+
+
+def _take_address(text, prefix):
+    """Read ``prefix<addr>`` at the start of text; return (address, rest) or None.
+
+    Postfix quotes local parts with special characters, e.g.
+    ``to=<"a>b, status=sent"@example.org>``; the closing quote is found first.
+    Copied from mail-sec-audit ``logs/postfix.py``; the projects share no package.
+    """
+    if not text.startswith(prefix + "<"):
+        return None
+    i = len(prefix) + 1
+    local_end = i
+    if text[i:i + 1] == '"':
+        j = i + 1
+        while j < len(text):
+            if text[j] == "\\":
+                j += 2
+                continue
+            if text[j] == '"':
+                break
+            j += 1
+        else:
+            return None
+        local_end = j + 1
+    end = text.find(">", local_end)
+    if end < 0:
+        return None
+    return text[i:end], text[end + 1:]
+
+
+def _reject_fields(tail):
+    """Parse ``[from=<A>][ to=<B>][ proto=P][ helo=<H>]`` up to the end of the line."""
+    fields = {}
+    for key in ("from", "to"):
+        taken = _take_address(tail, key + "=")
+        if taken is None:
+            continue
+        fields[key], tail = taken
+        if tail.startswith(" "):
+            tail = tail[1:]
+        elif tail:
+            return None
+    return fields if REJECT_END.fullmatch(tail) else None
+
+
+def _parse_reject(body):
+    """NOQUEUE reject with the Postfix-generated head and a structured tail.
+
+    RBL and policy texts contain ';', so the reason ends at the rightmost
+    '; ' whose remainder parses completely as the fixed field tail.
+    """
+    head = REJECT.match(body)
+    if not head or not _ip(head[4]):
+        return None
+    tail = _policy_tail(head[6])
+    return (head, *tail) if tail else None
+
+
+def _policy_tail(text):
+    """Split the fixed smtpd log_whatsup tail from untrusted policy text."""
+    position = len(text)
+    for _ in range(64):
+        position = text.rfind("; ", 0, position)
+        if position < 0:
+            return None
+        tail = text[position + 2:]
+        if tail.startswith(("from=<", "to=<", "proto=")):
+            fields = _reject_fields(tail)
+            if fields is not None and _address(fields.get("from", ""), True) and (
+                    "to" not in fields or _address(fields["to"])):
+                return text[:position], fields
+    return None  # adversarial separator count: leave this line explicitly unparsed
+
+
+def _parse_delivery(payload):
+    """``to=<A>[, orig_to=<B>]`` read quote-aware, then the fixed delivery fields."""
+    taken = _take_address(payload, "to=")
+    if not taken or not _address(taken[0]):
+        return None
+    recipient, rest = taken
+    orig_to = None
+    if rest.startswith(", orig_to="):
+        original = _take_address(rest[2:], "orig_to=")
+        if not original or not _address(original[0], True):
+            return None
+        orig_to, rest = original
+    tail = DELIVERY_TAIL.fullmatch(rest)
+    return (recipient, orig_to, tail) if tail else None
 
 
 def _ip(value):
@@ -186,12 +357,12 @@ def _parse_dovecot(body, event):
     if not m:
         return
     rest = m[3]
-    if "saved mail to" in rest.casefold():
+    if "saved mail to" in rest.casefold() or "stored mail into mailbox" in rest.casefold():
         event["_unparsed"] = True
     # Current-folder claims require doveadm. A Saved log proves the event only.
-    saved = re.fullmatch(r"(?:msgid=)?(<[^<>\s]{1,500}>):\s*(?:saved mail to|saved mail to mailbox) (.{1,200})", rest, re.I)
+    saved = re.fullmatch(r"(?:sieve: )?(?:msgid=)?(<[^<>\s]{1,500}>):\s*(?:(?:saved mail to|saved mail to mailbox) (.{1,200})|stored mail into mailbox '([^'\r\n]{1,200})')", rest, re.I)
     if saved and _address(m[2]):
-        event.update(kind="saved", recipient=m[2], message_id=saved[1], mailbox=saved[2])
+        event.update(kind="saved", recipient=m[2], message_id=saved[1], mailbox=saved[2] or saved[3])
         event.pop("_unparsed", None)
 
 
@@ -237,8 +408,13 @@ def _parse_event(timestamp, rest, source, line_no, text):
         return event
     if not program.startswith("postfix"):
         return event
-    instance, component = program.rsplit("/", 1)
+    # The first syslog_name level is the Postfix instance; middle levels name the
+    # master.cf service, so one message keeps one trace across them.
+    parts = program.split("/")
+    instance, component = parts[0], parts[-1]
     event.update(instance=instance, component=component)
+    if len(parts) > 2:
+        event["service"] = "/".join(parts[1:-1])
     connection = re.fullmatch(r"(connect|disconnect) from ([^\s\[\]]+)\[([^\]]+)\](?: .*)?", body)
     if connection and _ip(connection[3]):
         event.update(kind=connection[1], client_name=connection[2], client_ip=_ip(connection[3]))
@@ -248,67 +424,107 @@ def _parse_event(timestamp, rest, source, line_no, text):
         if auth and _ip(auth[1]):
             event.update(kind="auth_failure", client_ip=_ip(auth[1]))
             return event
-    if body.startswith("NOQUEUE: reject:"):
+    if body.startswith("NOQUEUE: "):
         event["_unparsed"] = True
-        rejection = re.match(r"^NOQUEUE: reject: (\S+) from ([^\s\[\]]+)\[([^\]]+)\]: ([45]\d\d) ([^;]*); from=<([^<>]*)> to=<([^<>]*)>(?: proto=\S+)?(?: helo=<[^>]*>)?$", body)
-        if rejection and _ip(rejection[3]) and _address(rejection[6], True) and _address(rejection[7]):
-            event.update(kind="rejected", stage=rejection[1], client_name=rejection[2],
-                         client_ip=_ip(rejection[3]), smtp_code=int(rejection[4]),
-                         reason=_clean(rejection[5]), sender=rejection[6], recipient=rejection[7])
+        rejection = _parse_reject(body)
+        if rejection:
+            head, reason, fields = rejection
+            event.update(kind="rejected" if head[1] == "reject" else "reject_warning", stage=head[2],
+                         client_name=head[3], client_ip=_ip(head[4]), smtp_code=int(head[5]),
+                         reason=_clean(reason))
+            # CONNECT/HELO-stage rejects carry no envelope; absent fields stay absent.
+            event.update({name: fields[key] for name, key in (("sender", "from"), ("recipient", "to")) if key in fields})
             event.pop("_unparsed", None)
+        else:
+            head = POLICY_ACTION.fullmatch(body)
+            tail = _policy_tail(head[5]) if head and _ip(head[4]) else None
+            if tail:
+                reason, fields = tail
+                event.update(kind="policy_action", action=head[1], stage=head[2],
+                             client_name=head[3], client_ip=_ip(head[4]), reason=_clean(reason))
+                event.update({name: fields[key] for name, key in (("sender", "from"), ("recipient", "to")) if key in fields})
+                event.pop("_unparsed", None)
         return event
-    queue = QUEUE.match(body)
-    if not queue:
-        if re.match(r"^(?:warning|error|fatal|panic):", body):
+    qid, separator, payload = body.partition(": ")
+    if not separator or not _queue_id(qid):
+        severity = re.match(r"^(warning|error|fatal|panic):", body)
+        # Warnings are routine (DNS, TLS, client noise); faults are reported.
+        operational_warning = bool(re.match(r"^warning: (?:connect to |problem talking to |(?:hash|btree|lmdb):/.*(?:unavailable|older than)|.*Milter service.*(?:refused|timed out))",body,re.I))
+        if severity and (severity[1] != "warning" or operational_warning):
             event.update(kind="daemon_error", reason=_clean(body))
+        elif severity:
+            event["severity"] = "warning"
         return event
-    qid, payload = queue.groups()
     event["queue_id"] = qid
     event["_unparsed"] = True
+    remote_reply = re.fullmatch(r"host ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?:? said: ([245]\d\d)(?:[ -]([245]\.\d{1,3}\.\d{1,3}))? .+", payload)
+    if component in ("smtp", "lmtp") and remote_reply and _ip(remote_reply[2]):
+        # A standalone reply does not identify a recipient or prove delivery.
+        event.update(kind="remote_reply", smtp_code=int(remote_reply[3]), remote_host=remote_reply[1], remote_ip=_ip(remote_reply[2]))
+        if remote_reply[4]:
+            event["dsn"] = remote_reply[4]
     if component == "cleanup":
         mid = re.fullmatch(r"message-id=(<[^<>\s]{0,500}>)", payload)
         if mid:
             event.update(kind="message_id", message_id=mid[1])
     elif component == "qmgr":
-        accepted = re.fullmatch(r"from=<([^<>]*)>, size=(\d+), nrcpt=(\d+) \((queue active|queue held)\)", payload)
-        if accepted and _address(accepted[1], True):
-            event.update(kind="accepted", sender=accepted[1], size=int(accepted[2]),
-                         recipient_count=int(accepted[3]), queue_state=accepted[4])
+        taken = _take_address(payload, "from=")
+        accepted = re.fullmatch(r", size=(\d{1,20}), nrcpt=(\d{1,9}) \((queue active|queue held)\)", taken[1]) if taken else None
+        if accepted and _address(taken[0], True):
+            event.update(kind="accepted", sender=taken[0], size=int(accepted[1]),
+                         recipient_count=int(accepted[2]), queue_state=accepted[3])
         elif payload == "removed":
             event["kind"] = "removed"
-        elif re.fullmatch(r"(?:(?:from=<[^<>]*>), )?(?:status=)?expired(?:, returned to sender)?", payload):
+        elif re.fullmatch(r", (?:status=)?expired(?:, returned to sender)?", taken[1] if taken else ", " + payload):
             event["kind"] = "expired"
     elif component == "smtpd":
-        client = re.fullmatch(r"client=([^\s\[\]]+)\[([^\]]+)\](?:, sasl_method=([^,\s]+), sasl_username=([^,\s]+))?", payload)
+        client = CLIENT.fullmatch(payload)
         if client and _ip(client[2]):
             event.update(kind="client", client_name=client[1], client_ip=_ip(client[2]))
             if client[4]:
                 event["authenticated_user"] = client[4]
+    elif component == "pickup":
+        uid = re.match(r"uid=(\d{1,20}) ", payload)
+        taken = _take_address(payload[uid.end():], "from=") if uid else None
+        if taken and _address(taken[0], True) and re.fullmatch(r"(?: orig_id=\S+)?", taken[1]):
+            event.update(kind="pickup", sender=taken[0], uid=int(uid[1]))
+    elif component in ("bounce", "defer", "trace"):
+        notice = NOTIFICATION.fullmatch(payload)
+        if notice and _queue_id(notice[3]):
+            event.update(kind="notification", notification=notice[1] + " " + notice[2], notification_queue_id=notice[3])
+    if component in ("smtp", "lmtp") and re.fullmatch(r"(?:lost connection with|conversation with) [^\s\[\]]+\[[^\]]+\](?::\d+)? (?:timed out )?while .*", payload):
+        event.update(kind="session_problem", reason=_clean(payload))
     if component in ("smtp", "lmtp", "local", "virtual", "pipe", "error", "retry", "discard"):
-        delivery = DELIVERY.fullmatch(payload)
-        if delivery and _address(delivery[1]):
-            event.update(kind="delivery", recipient=delivery[1], orig_to=delivery[2],
-                         relay=delivery[3], delay=float(delivery[4]),
-                         delays=dict(zip(DELAYS, map(float, delivery.group(5, 6, 7, 8)))),
-                         dsn=delivery[9], status=delivery[10], reason=_clean(delivery[11] or ""))
-            if delivery[10] == "sent":
+        delivery = _parse_delivery(payload)
+        if delivery:
+            recipient, orig_to, delivery = delivery
+            event.update(kind="delivery", recipient=recipient, orig_to=orig_to,
+                         relay=delivery[1], delay=float(delivery[2]),
+                         delays=dict(zip(DELAYS, map(float, delivery.group(3, 4, 5, 6)))),
+                         dsn=delivery[7], status=delivery[8], reason=_clean(delivery[9] or ""))
+            if delivery[8] == "sent":
                 if component == "smtp":
-                    relay_address = re.search(r"\[([^\]]+)\]", delivery[3])
+                    relay_address = re.search(r"\[([^\]]+)\]", delivery[1])
                     internal = bool(relay_address and _ip(relay_address[1]) and ipaddress.ip_address(relay_address[1]).is_loopback)
                     event["outcome"] = "internal_smtp_accepted" if internal else "next_smtp_accepted"
                 else:
                     event["outcome"] = "local_transport_accepted"
-                    if re.fullmatch(r"250 2\.0\.0 (?:<[^<>\s]+> )?Saved|delivered to (?:maildir|mailbox)", delivery[11] or "", re.I):
+                    if component == "lmtp" and re.fullmatch(r"250 2\.0\.0 (?:<[^<>\s]+> )?(?:[A-Za-z0-9+/=_:-]{16,128} )?Saved",delivery[9] or "",re.I) or component in ("local","virtual") and re.fullmatch(r"delivered to (?:maildir|mailbox)",delivery[9] or "",re.I):
                         event["outcome"] = "saved"
+                    if component == "discard":
+                        event["outcome"] = "discarded"
                 # Only the structured successful SMTP reply supplies a reinjection edge.
-                reinject = re.fullmatch(r"2\d\d(?: [245]\.\d+\.\d+)? .*\bqueued as ([A-Za-z0-9]{5,100})\)?", delivery[11] or "", re.I)
+                reinject = re.fullmatch(r"2\d\d(?: [245]\.\d+\.\d+)? .*\bqueued as ([A-Za-z0-9]{5,100})\)?", delivery[9] or "", re.I)
                 if reinject and event["outcome"] == "internal_smtp_accepted":
                     event["queued_as"] = reinject[1]
             else:
-                event["outcome"] = delivery[10]
+                event["outcome"] = delivery[8]
     if component == "cleanup" and payload.startswith("hold: "):
         event["kind"] = "hold"
         event["text"] = "%s: hold: [header content omitted]" % qid
+    if component == "cleanup" and payload.startswith("warning: header "):
+        event["kind"] = "header_warning"
+        event["text"] = "%s: warning: header [header content omitted]" % qid
     if event["kind"] == "other":
         # Do not turn arbitrary diagnostic/header text into a phantom queue.
         event.pop("queue_id", None)
@@ -484,7 +700,7 @@ def _greylist_findings(events, since, until):
 
 
 def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
-                 max_bytes=32 * 1024 * 1024, max_lines=150000):
+                 max_bytes=32 * 1024 * 1024, max_lines=150000, recent=False):
     """Analyze supplied sources without assuming their coverage is complete.
 
     Limits apply globally to decompressed bytes and lines, before time filtering.
@@ -510,6 +726,15 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
         try:
             with _open_regular(path) as stream:
                 source["readable"] = True
+                reverse = recent and not path.endswith((".gz",".bz2",".xz",".lzma"))
+                suffix, omitted = _recent_lines(stream,max(0,max_bytes-bytes_read),max(0,max_lines-lines_read)) if reverse and bytes_read<max_bytes and lines_read<max_lines else ([],False)
+                if reverse:
+                    source["read_direction"] = "from_end"
+                    source["line_numbering"] = "negative_from_end"
+                    if omitted:
+                        source["truncated"] = source["prefix_omitted"] = True
+                        source["errors"].append("Ограничен старый префикс файла; контекст до просмотренной части не подтверждён.")
+                    iterator = iter(suffix)
                 while True:
                     remaining = max_bytes - bytes_read
                     if remaining <= 0 or lines_read >= max_lines:
@@ -517,7 +742,14 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                         if stream.read(1):
                             source["truncated"] = True
                         break
-                    raw = stream.readline(min(remaining + 1, 65537))
+                    if reverse:
+                        item = next(iterator,None)
+                        if item is None:
+                            break
+                        line_no, raw = item
+                    else:
+                        raw = stream.readline(min(remaining + 1, 65537))
+                        line_no = source["lines"]+1
                     if not raw:
                         break
                     source["bytes"] += min(len(raw), remaining)
@@ -554,7 +786,7 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                     if local_counts[fingerprint] <= occurrences[fingerprint]:
                         overlap += 1
                         continue
-                    event = _parse_event(stamp, rest, source["path"], source["lines"], text)
+                    event = _parse_event(stamp, rest, source["path"], line_no, text)
                     if event["kind"] == "other":
                         source["ignored_lines"] += 1
                     if event.get("_unparsed"):
@@ -611,6 +843,9 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                   "delivery_reasons": reasons,
                   "top_rejection_reasons": dict(Counter(e["reason"] for e in visible if e["kind"] == "rejected").most_common(10)),
                   "top_auth_failure_ips": dict(Counter(e["client_ip"] for e in visible if e["kind"] == "auth_failure").most_common(10)),
+                  "reject_warnings": kinds.get("reject_warning", 0),
+                  "prequeue_policy_actions": dict(Counter(e["action"] for e in visible if e["kind"] == "policy_action")),
+                  "daemon_warnings": sum(1 for e in visible if e.get("severity") == "warning"),
                   "overlap_events_removed": overlap, "year_inferred_lines": inferred}
     evidence = [_event_public(e) for e in meaningful[:500]]
     findings = []
@@ -622,9 +857,9 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
         findings.append(_finding("LOG-NO-EVIDENCE", "UNKNOWN", "В выбранном окне нет подходящих событий", [],
                                  "Проверьте период, часовой пояс, доступ к архивам и известные адреса."))
     if issues or not paths:
-        findings.append(_finding("LOG-SOURCE-INCOMPLETE", "UNKNOWN", "Анализ источников неполон", [],
-                                 "Проверьте права, формат времени и лимиты; повторите по полным источникам.", sources=issues))
-    findings.append(_finding("LOG-COVERAGE", "UNKNOWN", "Границы доступных логов не доказывают полноту периода", [],
+        findings.append(_finding("LOG-SOURCE-INCOMPLETE", "UNKNOWN", "Анализ источников неполон", [{"source":s["path"],"text":"прочитано строк %d; не разобрано %d; лимит %s; %s" % (s["lines"],s["unparsed_lines"],s["truncated"],"; ".join(s["errors"]))} for s in sources if s["path"] in issues][:10],
+                                 "Смотрите конкретный источник и причину; для усечения увеличьте --max-lines/--max-bytes или сузьте период.", sources=issues))
+    findings.append(_finding("LOG-COVERAGE", "N/A", "Отчёт описывает просмотренные источники; внешний путь и потерянные логи неизвестны", [],
                              "При отсутствии события запросите более ранние архивы или trace соседнего SMTP-узла.",
                              supplied_sources=len(sources), year_inferred_lines=inferred))
     if meaningful:
@@ -638,9 +873,17 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
             findings.append(_finding(fid, "WARN", title, [_event_public(e) for e in matching[:10]],
                                      "Разберите точный SMTP/DSN response, transport и relay; повторная попытка может иметь иной исход.", count=len(matching)))
     if kinds.get("rejected"):
-        findings.append(_finding("MAIL-PREQUEUE-REJECT", "WARN", "Есть отказы до приёма в очередь",
+        findings.append(_finding("MAIL-PREQUEUE-REJECT", "WARN" if filters else "OK", "Есть отказы до приёма в очередь" if filters else "Отказы до очереди учтены; блокировка relay/спама сама по себе не сбой",
                                  [_event_public(e) for e in visible if e["kind"] == "rejected"][:10],
                                  "Сверьте стадию отказа и restriction chain: Queue ID ещё мог не появиться."))
+    if kinds.get("policy_action"):
+        findings.append(_finding("MAIL-PREQUEUE-POLICY", "OK", "Postfix запросил FILTER/HOLD/DISCARD до очереди",
+                                 [_event_public(e) for e in visible if e["kind"] == "policy_action"][:10],
+                                 "Это запрос действия SMTP-политики. Фактический hold/discard, принятие и доставку подтверждайте последующими событиями."))
+    if kinds.get("header_warning"):
+        findings.append(_finding("MAIL-HEADER-WARNING", "WARN", "Сработало предупреждение cleanup о заголовке",
+                                 [_event_public(e) for e in visible if e["kind"] == "header_warning"][:10],
+                                 "Содержимое заголовка исключено из отчёта; предупреждение не доказывает отказ доставки."))
     if kinds.get("auth_failure"):
         findings.append(_finding("MAIL-AUTH-FAILURE", "FAIL" if kinds["auth_failure"] > 100 else "WARN",
                                  "Видны неудачные SMTP-аутентификации",
