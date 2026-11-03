@@ -649,6 +649,85 @@ def policy_listener_checks(ctx, contexts):
                 "Назначение проверяйте по процессу/службе; listener не доказывает корректный policy response.", endpoint=endpoint)
 
 
+_RBL_RESTRICTIONS = ("reject_rbl_client", "reject_rhsbl_client", "reject_rhsbl_sender",
+                     "reject_rhsbl_helo", "reject_rhsbl_recipient", "reject_rhsbl_reverse_client")
+_RBL_OCTET = r"(\d{1,3}|\[[0-9.;]+\])"
+
+
+def rbl_filter_matches(pattern, address):
+    """Evaluate a Postfix reply filter ``d.d.d.d`` against one IPv4 reply.
+
+    Each d is a number or, since Postfix 2.8, ``[...]`` with ``;``-separated
+    numbers and ``n..m`` ranges. None means the filter is not understood.
+    """
+    match = re.fullmatch(r"\.".join([_RBL_OCTET] * 4), pattern)
+    if not match:
+        return None
+    for part, value in zip(match.groups(), map(int, address.split("."))):
+        if part.isdigit():
+            if int(part) != value:
+                return False
+            continue
+        hit = False
+        for item in part[1:-1].split(";"):
+            bounds = item.split("..")
+            if len(bounds) > 2 or not all(b.isdigit() for b in bounds):
+                return None
+            hit = hit or int(bounds[0]) <= value <= int(bounds[-1])
+        if not hit:
+            return False
+    return True
+
+
+def dnsbl_filter_checks(ctx, contexts):
+    """Postfix rejects on any A record unless a reply filter is set, so an
+    unfiltered public Spamhaus zone turns error replies into rejections."""
+    seen, unparsed = {}, False
+    for name, config in contexts.items():
+        for parameter, value in config.items():
+            if value is None:
+                unparsed = True
+                continue
+            tokens = _chain_tokens(value)
+            if tokens is None:
+                unparsed = True
+                continue
+            for i, token in enumerate(tokens[:-1]):
+                zone, _, pattern = tokens[i + 1].partition("=")
+                zone = zone.lower().rstrip(".")
+                if token not in _RBL_RESTRICTIONS or not (zone == "spamhaus.org" or zone.endswith(".spamhaus.org")):
+                    continue
+                key = (token, zone, pattern)
+                seen.setdefault(key, []).append(name + "/" + parameter)
+    for (restriction, zone, pattern), places in sorted(seen.items()):
+        codes = sorted(_DNSBL_ERRORS) + ([_DBL_IP_QUERY] if zone.split(".")[0] == "dbl" else [])
+        verdicts = {code: rbl_filter_matches(pattern, code) if pattern else True for code in codes}
+        accepted = [code for code, hit in verdicts.items() if hit]
+        rule = restriction + " " + zone + ("=" + pattern if pattern else "")
+        if None in verdicts.values():
+            status, title = "UNKNOWN", rule + ": фильтр кодов ответа не разобран"
+            next_step = "Сверьте фильтр с документацией Postfix (reject_rbl_client) и кодами ошибок Spamhaus."
+        elif accepted:
+            status = "WARN"
+            title = rule + ": " + ("нет фильтра кодов ответа" if not pattern else "фильтр пропускает " + ", ".join(accepted)) + "; ошибка Spamhaus станет отказом"
+            next_step = ("Без фильтра Postfix считает listing любой A-ответ, включая 127.255.255.252/254/255 публичных зеркал Spamhaus; "
+                         "при заблокированном resolver это отказ всей входящей почте. Задайте фильтр по кодам listing "
+                         "(как в MIAB: zen.spamhaus.org=127.0.0.[2..11], dbl.spamhaus.org=127.0.1.[2..99]); Radar конфигурацию не меняет.")
+        else:
+            status, title = "OK", rule + ": коды ошибок Spamhaus не считаются listing"
+            next_step = "Фильтр защищает от ложных отказов, но при заблокированном resolver RBL перестаёт отклонять спам: проверьте DNSBL.CONTROL с --network."
+        ctx.add("DNSBL.POSTFIX_FILTER", status, clean(title),
+                [{"source": "postconf" if place.startswith("global/") else "postconf -P", "text": clean(place + ": " + rule)} for place in places[:20]],
+                next_step, restriction=restriction, zone=clean(zone), filter=clean(pattern),
+                contexts=[clean(p) for p in places[:80]], error_codes_accepted=accepted)
+    if unparsed or not seen:
+        ctx.add("DNSBL.POSTFIX_FILTER", "UNKNOWN" if unparsed else "N/A",
+                "Публичные зоны Spamhaus в restrictions Postfix: " + ("часть цепочек не прочитана или не разобрана" if unparsed else "не используются"),
+                [{"source": "postconf", "text": "selected smtpd_{client,sender,recipient,relay}_restrictions"}],
+                "Restriction classes, access-map actions, smtpd_helo/data_restrictions и postscreen_dnsbl_sites здесь не разбираются.",
+                coverage=True)
+
+
 def parse_dns(result, record_type):
     """Preserve authoritative DNS response states; empty output is never clean."""
     if result.missing:
@@ -667,17 +746,39 @@ def parse_dns(result, record_type):
     return ("NODATA" if state == "NOERROR" and not answers else state), answers
 
 
+# Public-zone return codes, checked against Spamhaus' own FAQ 2026-11-02.
+# .5-.8 are reserved; unknown/future codes stay UNKNOWN until reviewed.
+_DNSBL_LISTED = {
+    "ip": {"127.0.0." + str(n) for n in (2, 3, 4, 9, 10, 11)},
+    "domain": {"127.0.1.2", "127.0.1.4", "127.0.1.5", "127.0.1.6", "127.0.1.102", "127.0.1.103", "127.0.1.104", "127.0.1.105", "127.0.1.106"}}
+# Error replies of the public mirrors in any zone (Spamhaus DNSBL usage and DBL
+# FAQs, checked 2026-11-03). They describe the query path, never the target.
+_DNSBL_ERRORS = {"127.255.255.252": "zone_name_error",
+                 "127.255.255.254": "public_resolver_blocked",
+                 "127.255.255.255": "query_limit_exceeded"}
+_DBL_IP_QUERY = "127.0.1.255"
+_DNSBL_NEXT_STEPS = {
+    "public_resolver_blocked": "Ответ 127.255.255.254: Spamhaus не обслуживает запросы через публичный или общий resolver; репутация неизвестна. Причина и исправление — в DNSBL.CONTROL.",
+    "query_limit_exceeded": "Ответ 127.255.255.255: превышен лимит запросов к публичному зеркалу с этого resolver или адреса; репутация неизвестна. Проверьте объём DNSBL-запросов и условия бесплатного доступа (или DQS).",
+    "zone_name_error": "Ответ 127.255.255.252: Spamhaus не распознал имя зоны в запросе; сверьте имя DNSBL-зоны.",
+    "ip_query_on_domain_list": "Ответ 127.0.1.255: DBL не принимает IP-адреса; передайте в --domain доменное имя.",
+    "mixed_error_response": "В ответе одновременно код ошибки Spamhaus и другие адреса; это не listing. Повторите позже через собственный resolver.",
+}
+
+
 def dnsbl_state(state, answers, kind):
     if state == "NXDOMAIN":
         return "OK", "not_listed"
     if state != "NOERROR":
         return "UNKNOWN", "dns_" + state.lower()
-    # Public-zone return codes, checked against Spamhaus' own FAQ 2026-11-02.
-    # .5-.8 are reserved; unknown/future codes stay UNKNOWN until reviewed.
-    expected = {"127.0.0." + str(n) for n in (2, 3, 4, 9, 10, 11)} if kind == "ip" else {
-        "127.0.1.2", "127.0.1.4", "127.0.1.5", "127.0.1.6", "127.0.1.102", "127.0.1.103", "127.0.1.104", "127.0.1.105", "127.0.1.106"}
-    if answers and all(a.strip() in expected for a in answers):
+    codes = {a.strip() for a in answers}
+    if codes and codes <= _DNSBL_LISTED[kind]:
         return "WARN", "listed"
+    errors = dict(_DNSBL_ERRORS, **({_DBL_IP_QUERY: "ip_query_on_domain_list"} if kind == "domain" else {}))
+    if len(codes) == 1 and codes <= errors.keys():
+        return "UNKNOWN", errors[codes.pop()]
+    if codes & errors.keys():
+        return "UNKNOWN", "mixed_error_response"
     return "UNKNOWN", "service_or_unrecognized_response"
 
 
@@ -829,13 +930,15 @@ def _dnsbl(ctx, query, kind, family=None):
     state, answers = parse_dns(result, "A")
     status, outcome = dnsbl_state(state, answers, kind)
     controls = None
-    if outcome in {"listed", "not_listed"}:
+    # An error reply also runs the controls: they show whether the whole query
+    # path is refused, which is what the administrator has to fix.
+    if outcome in {"listed", "not_listed"} or outcome in _DNSBL_ERRORS.values():
         controls = _dnsbl_controls(ctx, kind)
-        if not controls:
+        if not controls and outcome in {"listed", "not_listed"}:
             status, outcome = "UNKNOWN", "operational_controls_failed"
     ctx.add("DNSBL." + ("IPV6" if kind == "ip" and family == 6 else kind.upper()), status, "{}{} reputation: {}".format(kind, " IPv" + str(family) if family else "", outcome),
             [command_evidence(argv, result)],
-            "Проверьте актуальные условия доступа оператора DNSBL; служебный код/ошибка resolver не равны listing. Domain и IP reputation независимы.",
+            _DNSBL_NEXT_STEPS.get(outcome, "Проверьте актуальные условия доступа оператора DNSBL; служебный код/ошибка resolver не равны listing. Domain и IP reputation независимы."),
             query=query, family=family, dns_state=state, outcome=outcome,
             operational_controls_passed=controls, answers=[clean(a) for a in answers])
 
@@ -852,15 +955,25 @@ def _dnsbl_controls(ctx, kind):
         state, answers = parse_dns(result, "A")
         states.append((state, answers))
         evidence.append(command_evidence(argv, result))
-    positive_ok = dnsbl_state(states[0][0], states[0][1], kind)[1] == "listed"
+    outcomes = [dnsbl_state(state, answers, kind)[1] for state, answers in states]
+    positive_ok = outcomes[0] == "listed"
     negative_ok = states[1][0] == "NXDOMAIN" and not states[1][1]
     passed = positive_ok and negative_ok
     ctx.dnsbl_controls[kind] = passed
-    ctx.add("DNSBL.CONTROL." + kind.upper(), "OK" if passed else "UNKNOWN",
-            "{} DNSBL: positive/negative operational controls {}".format(kind, "passed" if passed else "не подтверждены"),
-            evidence,
-            "Public resolver может возвращать NXDOMAIN для всех запросов; без обоих control results репутационный вывод неизвестен.",
-            positive_query=positive, negative_query=negative, positive_ok=positive_ok, negative_ok=negative_ok)
+    # A Spamhaus error code on a control is a confirmed refusal of this query
+    # path, not merely missing evidence.
+    refusal = next((o for o in outcomes if o in _DNSBL_ERRORS.values()), None)
+    next_step = {
+        "public_resolver_blocked": "Spamhaus отклоняет запросы через resolver этого хоста как публичный/общий (127.255.255.254). Используйте собственный рекурсивный resolver без forwarders на публичные DNS (в MIAB — локальный bind9 на 127.0.0.1) или Spamhaus DQS. Пока так, reject_rbl_client с фильтром кодов (как в MIAB) ничего не отклоняет, а без фильтра отклоняет всю почту. Resolver Postfix в chroot сверьте с DNS.POSTFIX_RESOLVER.",
+        "query_limit_exceeded": "Spamhaus сообщает о превышении лимита запросов (127.255.255.255) для resolver этого хоста. Проверьте объём DNSBL-запросов, общий ли это resolver, и условия бесплатного доступа (или DQS). Postfix RBL в это время работает так же ненадёжно.",
+        "zone_name_error": "Spamhaus не распознал имя контрольной зоны (127.255.255.252); проверьте, не переписывает ли resolver или DNS-прокси запросы.",
+    }.get(refusal, "Public resolver может возвращать NXDOMAIN для всех запросов; без обоих control results репутационный вывод неизвестен.")
+    ctx.add("DNSBL.CONTROL." + kind.upper(), "OK" if passed else "WARN" if refusal else "UNKNOWN",
+            "{} DNSBL: positive/negative operational controls {}".format(
+                kind, "passed" if passed else "отклонены Spamhaus: " + refusal if refusal else "не подтверждены"),
+            evidence, next_step,
+            positive_query=positive, negative_query=negative, positive_ok=positive_ok, negative_ok=negative_ok,
+            positive_outcome=outcomes[0], negative_outcome=outcomes[1], operator_error=refusal, resolver="system default")
     return passed
 
 
@@ -1112,6 +1225,7 @@ def collect_checks(runner, args):
         queue_checks(ctx)
         disk_checks(ctx)
     contexts = postfix_checks(ctx)
+    dnsbl_filter_checks(ctx, contexts)
     whitelist_checks(ctx, contexts)
     dns_checks(ctx)
     tls_checks(ctx)

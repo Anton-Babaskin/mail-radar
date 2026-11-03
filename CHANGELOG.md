@@ -20,6 +20,12 @@
   3.9/3.10.
 * Record initial source findings, behavior preservation, architecture, sibling
   project boundaries and anonymized incident context under `docs/`.
+* Name Spamhaus error replies (`127.255.255.252/254/255`, DBL `127.0.1.255`)
+  instead of a generic service response, run the operational controls for them
+  and report a refused query path as `DNSBL.CONTROL.*` WARN with the fix.
+* Add `DNSBL.POSTFIX_FILTER`: Postfix RBL restrictions for public Spamhaus
+  zones without a reply filter, or with one that admits error codes, would turn
+  those replies into rejections.
 
 This entry describes the working change. It is not a release or deployment
 announcement. Consult `docs/validation.md` for actually executed checks and
