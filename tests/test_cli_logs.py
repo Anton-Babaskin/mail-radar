@@ -148,7 +148,7 @@ class OfflineWatchTests(unittest.TestCase):
         path.rename(self.root / "mail.log.1")
         path.write_text(self.stamp() + " box postfix/lmtp[2]: ABCDE: to=<office@local.example>, relay=dovecot, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n")
         time.sleep(.35)
-        path.write_text(self.stamp() + " box postfix/qmgr[1]: OTHER: removed\n")
+        path.write_text(self.stamp() + " box postfix/qmgr[1]: 4F5E6D7C8B: removed\n")
         records, report = self.collect(process, first)
         self.assertEqual(process.returncode, 1)
         self.assertTrue(any(record["type"] == "watch_progress" for record in records))
@@ -166,7 +166,7 @@ class OfflineWatchTests(unittest.TestCase):
         process, first = self.start([one, two], "1.0", "--from", "sender@partner.example")
         line = self.stamp() + " box postfix/qmgr[1]: ABCDE: from=<sender@partner.example>, size=3, nrcpt=1 (queue active)\n"
         one.write_text(line[:len(line)//2])
-        two.write_text(self.stamp() + " box postfix/qmgr[1]: OTHER: from=<other@partner.example>, size=3, nrcpt=1 (queue active)\n")
+        two.write_text(self.stamp() + " box postfix/qmgr[1]: 4F5E6D7C8B: from=<other@partner.example>, size=3, nrcpt=1 (queue active)\n")
         time.sleep(.2)
         with one.open("a") as stream:
             stream.write(line[len(line)//2:])

@@ -153,3 +153,25 @@ policy match без данных о конфигурации того време
 Не моделируются: restriction classes, действия access maps, `smtpd_helo_restrictions`,
 `smtpd_data_restrictions` и `postscreen_dnsbl_sites` (у postscreen ещё веса,
 threshold и `postscreen_dnsbl_action`). Об этом сообщает finding покрытия.
+
+## Третий проход: разбор журналов (2026-11-03)
+
+Вторая часть той же рекомендации: перенести структурный разбор полей из
+mail-sec-audit (`logs/postfix.py`, `logs/timeparse.py`). Код скопирован, общего
+пакета нет. Все строки ниже подтверждены запуском `analyze_logs` на Python 3.9.24,
+3.10.19 и 3.14.4 до исправления (`docs/validation.md`); новые тесты падают на `main`.
+
+| ID / приоритет | Подтверждение | Исправление и регрессия |
+|---|---|---|
+| MR-T003 / P1 | `PROGRAM` не принимал многоуровневый `syslog_name`: строки MIAB `postfix/submission/smtpd` (порты 465/587, `setup/mail-postfix.sh` на `8c032705`) отбрасывались как unrecognized при `complete=True`. Не видны SASL-атаки на submission и авторизованные отправители. | Первый уровень — instance, последний — component, средние — `service`; сообщение остаётся в одном trace. `test_miab_submission_syslog_name_joins_one_trace`. |
+| MR-T004 / P1 | `datetime.fromisoformat` до Python 3.11 не читает `+0300` и больше шести цифр дробной части. `journalctl -o short-iso-precise` до systemd 255 печатает `%z` (исходник `logs-show.c` v249/v252), поэтому `--journal` на Ubuntu 22.04 с её Python 3.10 не разбирал ни одной строки. | Время собирается из групп; неверный offset (`+2500`) остаётся unparsed. `test_journald_249_offsets_and_long_fractions_parse_on_python_39`. |
+| MR-T005 / P1 | NOQUEUE reject с `;` в причине (типовой RBL-отказ Spamhaus) не разбирался: `rejected_before_queue` занижен, источник помечен неполным. | Голова строки разбирается строго, хвост `from/to/proto/helo` — справа, с адресами в кавычках; также `reject_warning` и отказ на CONNECT без конверта. `test_rbl_reject_reason_with_semicolons_and_reject_warning`, `test_tail_inside_quoted_sender_does_not_replace_the_real_fields`. |
+| MR-T006 / P2 | `QUEUE` (`[A-Za-z0-9]{5,100}:`) принимал `warning`, `fatal`, `statistics`, `NOQUEUE` за Queue ID: `MAIL-DAEMON-ERROR` был недостижим, предупреждения и статистика anvil помечали источник неполным. | Queue ID по `mail_queue.h`: short hex или long (без гласных, `z` перед inode). `fatal/error/panic` → `daemon_error`, `warning` → счётчик `daemon_warnings`. `test_queue_ids_follow_postfix_grammar_so_daemon_faults_are_visible`. |
+| MR-T007 / P2 | Адрес с `>` или пробелом в quoted local part (`to=<"a>b"@…>`) делал delivery/qmgr/orig_to строку unparsed. | Адреса читаются с учётом кавычек; unquoted адрес не может содержать `"`. `test_quoted_local_parts_cannot_shift_queue_fields`. |
+| MR-T008 / P2 | `client=…[ip]:port` (`smtpd_client_port_logging`) и `sasl_sender=` не разбирались. | `test_client_port_logging_and_sasl_sender`. |
+| MR-T009 / P2 | pickup (`uid=0 from=<root>`, почта cron), уведомления bounce и `lost connection`/`conversation … timed out` помечали источник неполным на любом реальном сервере. | Отдельные kinds `pickup`, `notification`, `session_problem`. `test_local_submission_notifications_and_session_problems_are_known`. |
+
+Тестовые Queue ID `FIRST`, `SECOND`, `EARLY`, `OTHER` и long ID с гласной заменены
+допустимыми; fixtures и `examples/mail.log` уже использовали hex. Остаются
+неразобранными (источник неполон): `NOQUEUE: filter/hold/discard`, queue-level
+`warning: header …`, `host … said:` отдельной строкой.

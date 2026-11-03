@@ -26,6 +26,14 @@
 * Add `DNSBL.POSTFIX_FILTER`: Postfix RBL restrictions for public Spamhaus
   zones without a reply filter, or with one that admits error codes, would turn
   those replies into rejections.
+* Read Postfix log fields structurally (address reader copied from
+  mail-sec-audit): quote-aware addresses, Postfix short/long Queue IDs, client
+  port and `sasl_sender`, RBL rejects whose reason contains `;`,
+  `reject_warning`, CONNECT-stage rejects, pickup, DSN notifications and SMTP
+  session problems. MIAB `postfix/submission/smtpd` lines join the message
+  trace, journald `+0300` and nanosecond timestamps parse on Python 3.9/3.10,
+  and `fatal`/`error`/`panic` lines reach `MAIL-DAEMON-ERROR` (warnings are
+  counted in `daemon_warnings`).
 
 This entry describes the working change. It is not a release or deployment
 announcement. Consult `docs/validation.md` for actually executed checks and
