@@ -99,9 +99,9 @@ class LogAnalysisTests(unittest.TestCase):
 
     def test_sender_context_before_window_and_multiple_recipients(self):
         result = self.analyze(
-            "2026-11-02T08:59:00Z box postfix/qmgr[1]: 4Xp2kT0abcD123456: from=<sender@partner.example>, size=3, nrcpt=2 (queue active)\n"
-            "2026-11-02T09:25:36Z box postfix/smtp[3]: 4Xp2kT0abcD123456: to=<one@remote.example>, relay=mx.remote.example[192.0.2.2]:25, delay=3, delays=1/0/0/2, dsn=2.0.0, status=sent (250 accepted)\n"
-            "2026-11-02T09:25:37Z box postfix/smtp[3]: 4Xp2kT0abcD123456: to=<two@remote.example>, relay=mx.remote.example[192.0.2.2]:25, delay=4, delays=1/0/0/3, dsn=2.0.0, status=sent (250 accepted)\n",
+            "2026-11-02T08:59:00Z box postfix/qmgr[1]: 4Xp2kT0bcDz12345: from=<sender@partner.example>, size=3, nrcpt=2 (queue active)\n"
+            "2026-11-02T09:25:36Z box postfix/smtp[3]: 4Xp2kT0bcDz12345: to=<one@remote.example>, relay=mx.remote.example[192.0.2.2]:25, delay=3, delays=1/0/0/2, dsn=2.0.0, status=sent (250 accepted)\n"
+            "2026-11-02T09:25:37Z box postfix/smtp[3]: 4Xp2kT0bcDz12345: to=<two@remote.example>, relay=mx.remote.example[192.0.2.2]:25, delay=4, delays=1/0/0/3, dsn=2.0.0, status=sent (250 accepted)\n",
             filters={"from": "sender@partner.example"})
         self.assertEqual(result["statistics"]["observed_messages"], 1)
         self.assertEqual(result["statistics"]["recipient_delivery_events"], 2)
@@ -122,10 +122,10 @@ class LogAnalysisTests(unittest.TestCase):
 
     def test_localhost_reinjection_links_not_two_messages(self):
         result = self.analyze(
-            "2026-11-02T09:20:00Z box postfix/qmgr[1]: FIRST: from=<sender@partner.example>, size=3, nrcpt=1 (queue active)\n"
-            "2026-11-02T09:20:01Z box postfix/smtp[3]: FIRST: to=<office@local.example>, relay=127.0.0.1[127.0.0.1]:10025, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as SECOND)\n"
-            "2026-11-02T09:20:01Z box postfix/qmgr[2]: SECOND: from=<sender@partner.example>, size=3, nrcpt=1 (queue active)\n"
-            "2026-11-02T09:20:02Z box postfix/lmtp[3]: SECOND: to=<office@local.example>, relay=dovecot, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n")
+            "2026-11-02T09:20:00Z box postfix/qmgr[1]: 1F2A3B4C5D: from=<sender@partner.example>, size=3, nrcpt=1 (queue active)\n"
+            "2026-11-02T09:20:01Z box postfix/smtp[3]: 1F2A3B4C5D: to=<office@local.example>, relay=127.0.0.1[127.0.0.1]:10025, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 2E3D4C5B6A)\n"
+            "2026-11-02T09:20:01Z box postfix/qmgr[2]: 2E3D4C5B6A: from=<sender@partner.example>, size=3, nrcpt=1 (queue active)\n"
+            "2026-11-02T09:20:02Z box postfix/lmtp[3]: 2E3D4C5B6A: to=<office@local.example>, relay=dovecot, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n")
         self.assertEqual(result["statistics"]["observed_messages"], 1)
         self.assertEqual(result["statistics"]["queues"], 2)
         self.assertEqual(result["statistics"]["outcomes"], {"internal_smtp_accepted": 1, "saved": 1})
@@ -178,7 +178,7 @@ class LogAnalysisTests(unittest.TestCase):
 
     def test_legacy_statistics_use_one_window_and_structured_fields(self):
         result = self.analyze(
-            "2026-11-02T08:59:59Z box postfix/smtpd[2]: EARLY: client=mx.partner.example[192.0.2.5], sasl_method=PLAIN, sasl_username=early@local.example\n"
+            "2026-11-02T08:59:59Z box postfix/smtpd[2]: 3A4B5C6D7E: client=mx.partner.example[192.0.2.5], sasl_method=PLAIN, sasl_username=early@local.example\n"
             "2026-11-02T09:20:00Z box postfix/smtpd[2]: ABCDE: client=mx.partner.example[192.0.2.5], sasl_method=PLAIN, sasl_username=office@local.example\n"
             "2026-11-02T09:20:01Z box postfix/smtpd[2]: warning: unknown[192.0.2.5]: SASL LOGIN authentication failed: authentication failure\n"
             "2026-11-02T09:20:02Z box postfix/smtp[2]: ABCDE: to=<one@remote.example>, relay=none, delay=2, delays=1/0/0/1, dsn=5.1.1, status=bounced (User unknown)\n")
@@ -259,7 +259,7 @@ class LogAnalysisTests(unittest.TestCase):
     def test_remote_localhost_prefix_and_diagnostic_saved_word_not_storage_proof(self):
         result = self.analyze(
             "2026-11-02T09:20:00Z box postfix/smtp[2]: ABCDE: to=<one@remote.example>, relay=localhost.evil.example[203.0.113.1]:25, delay=2, delays=1/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n"
-            "2026-11-02T09:20:01Z box postfix/lmtp[2]: OTHER: to=<office@local.example>, relay=dovecot, delay=3, delays=1/0/0/2, dsn=2.0.0, status=sent (250 2.0.0 Not Saved)\n")
+            "2026-11-02T09:20:01Z box postfix/lmtp[2]: 4F5E6D7C8B: to=<office@local.example>, relay=dovecot, delay=3, delays=1/0/0/2, dsn=2.0.0, status=sent (250 2.0.0 Not Saved)\n")
         self.assertEqual(result["statistics"]["outcomes"], {"next_smtp_accepted": 1, "local_transport_accepted": 1})
 
     def test_later_greylist_rejection_not_hidden_by_an_earlier_pass(self):
@@ -305,7 +305,7 @@ class LogAnalysisTests(unittest.TestCase):
     def test_expired_and_hold_events_have_distinct_lifecycle_evidence(self):
         result = self.analyze(
             "2026-11-02T09:20:00Z box postfix/qmgr[2]: ABCDE: from=<sender@partner.example>, status=expired, returned to sender\n"
-            "2026-11-02T09:20:01Z box postfix/cleanup[2]: OTHER: hold: header Subject: sensitive content from x\n")
+            "2026-11-02T09:20:01Z box postfix/cleanup[2]: 4F5E6D7C8B: hold: header Subject: sensitive content from x\n")
         self.assertEqual(result["statistics"]["expired"], 1)
         self.assertEqual(result["statistics"]["hold"], 1)
         self.assertNotIn("sensitive content", json.dumps(result))
@@ -316,12 +316,12 @@ class LogAnalysisTests(unittest.TestCase):
             "2026-11-02T09:20:00Z box postfix/lmtp[2]: ABCDE: to=<office@local.example>, relay=dovecot, delay=2, delays=1/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n"
             "2026-11-02T09:20:01Z box postfix/smtp[2]: ABCDE: to=<one@remote.example>, relay=none, delay=3, delays=1/0/0/2, dsn=4.4.1, status=deferred (timeout)\n"
             "2026-11-02T09:59:59Z box postfix/qmgr[2]: ABCDE: from=<sender@partner.example>, status=expired, returned to sender\n"
-            "2026-11-02T09:20:01Z box postfix/smtp[2]: OTHER: to=<two@remote.example>, relay=none, delay=3, delays=1/0/0/2, dsn=4.4.1, status=deferred (timeout)\n"
-            "2026-11-02T09:59:59Z box postfix/qmgr[2]: OTHER: status=expired, returned to sender\n")
+            "2026-11-02T09:20:01Z box postfix/smtp[2]: 4F5E6D7C8B: to=<two@remote.example>, relay=none, delay=3, delays=1/0/0/2, dsn=4.4.1, status=deferred (timeout)\n"
+            "2026-11-02T09:59:59Z box postfix/qmgr[2]: 4F5E6D7C8B: status=expired, returned to sender\n")
         traces = {q["queue_id"]: q for q in result["traces"]}
         self.assertEqual(traces["ABCDE"]["outcome"], "mixed")
         self.assertEqual(traces["ABCDE"]["recipient_outcomes"], {"office@local.example": "saved", "one@remote.example": "expired"})
-        self.assertEqual(traces["OTHER"]["outcome"], "expired")
+        self.assertEqual(traces["4F5E6D7C8B"]["outcome"], "expired")
 
     def test_long_window_does_not_push_old_month_into_future_year(self):
         result = self.analyze("Jan 02 09:25:33 box postfix/qmgr[1]: ABCDE: removed\n",
@@ -333,6 +333,97 @@ class LogAnalysisTests(unittest.TestCase):
                               since=utc("2024-02-01T00:00:00Z"), until=utc("2025-01-01T10:00:00Z"))
         self.assertEqual(result["traces"][0]["events"][0]["time"][:10], "2024-02-29")
         self.assertEqual(result["completeness"]["unparsed_lines"], 0)
+
+    def test_journald_249_offsets_and_long_fractions_parse_on_python_39(self):
+        # journalctl -o short-iso-precise before systemd 255 prints +0300 (strftime %z).
+        result = self.analyze(
+            "2026-11-02T12:20:00.123456+0300 box postfix/qmgr[1]: ABCDE: removed\n"
+            "2026-11-02T09:21:00.123456789Z box postfix/qmgr[1]: BCDEF: removed\n"
+            "2026-11-02T09:22:00+2500 box postfix/qmgr[1]: CDEF0: removed\n")
+        times = sorted(e["time"] for trace in result["traces"] for e in trace["events"])
+        self.assertEqual(times, ["2026-11-02T09:20:00.123456+00:00", "2026-11-02T09:21:00.123456+00:00"])
+        self.assertEqual(result["completeness"]["unparsed_lines"], 1)
+
+    def test_rbl_reject_reason_with_semicolons_and_reject_warning(self):
+        result = self.analyze(
+            "2026-11-02T09:20:00Z box postfix/smtpd[2]: NOQUEUE: reject: RCPT from unknown[192.0.2.5]: 554 5.7.1 Service unavailable; "
+            "Client host [192.0.2.5] blocked using zen.spamhaus.org; https://www.spamhaus.org/query/ip/192.0.2.5; "
+            "from=<sender@partner.example> to=<office@local.example> proto=ESMTP helo=<mx.partner.example>\n"
+            "2026-11-02T09:20:01Z box postfix/smtpd[2]: NOQUEUE: reject_warning: RCPT from unknown[192.0.2.6]: 450 4.7.1 Client host rejected: cannot find your hostname; "
+            "from=<sender@partner.example> to=<office@local.example> proto=ESMTP helo=<x.partner.example>\n"
+            "2026-11-02T09:20:02Z box postfix/smtpd[2]: NOQUEUE: reject: CONNECT from unknown[192.0.2.7]: 554 5.7.1 <unknown[192.0.2.7]>: Client host rejected: Access denied; proto=SMTP\n")
+        stats = result["statistics"]
+        self.assertEqual(stats["rejected_before_queue"], 2)
+        self.assertEqual(stats["reject_warnings"], 1)
+        self.assertIn("5.7.1 Service unavailable; Client host [192.0.2.5] blocked using zen.spamhaus.org; https://www.spamhaus.org/query/ip/192.0.2.5",
+                      stats["top_rejection_reasons"])
+        connect = [e for e in result["evidence"] if e.get("stage") == "CONNECT"][0]
+        self.assertNotIn("sender", connect)
+        self.assertTrue(result["completeness"]["complete"])
+
+    def test_tail_inside_quoted_sender_does_not_replace_the_real_fields(self):
+        text = ('2026-11-02T09:20:00Z box postfix/smtpd[2]: NOQUEUE: reject: RCPT from unknown[192.0.2.5]: 450 4.2.0 Greylisted; '
+                'from=<"q; from=<forged@evil.example> to=<victim@other.example> proto=ESMTP helo=<h>"@evil.example> '
+                'to=<office@local.example> proto=ESMTP helo=<mx.evil.example>\n')
+        result = self.analyze(text, filters={"to": "office@local.example"})
+        self.assertEqual(result["statistics"]["rejected_before_queue"], 1)
+        self.assertEqual(self.analyze(text, filters={"to": "victim@other.example"})["statistics"]["rejected_before_queue"], 0)
+        self.assertEqual(self.analyze(text, filters={"from": "forged@evil.example"})["statistics"]["rejected_before_queue"], 0)
+
+    def test_quoted_local_parts_cannot_shift_queue_fields(self):
+        result = self.analyze(
+            '2026-11-02T09:20:00Z box postfix/qmgr[1]: ABCDE: from=<"x>, size=1, nrcpt=9 (queue active)"@evil.example>, size=5, nrcpt=1 (queue active)\n'
+            '2026-11-02T09:20:01Z box postfix/lmtp[3]: ABCDE: to=<"odd>name"@local.example>, orig_to=<"alias>x"@local.example>, relay=dovecot, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 2.0.0 Saved)\n')
+        events = {e["kind"]: e for e in result["traces"][0]["events"]}
+        self.assertEqual((events["accepted"]["size"], events["accepted"]["recipient_count"]), (5, 1))
+        self.assertEqual(events["accepted"]["sender"], '"x>, size=1, nrcpt=9 (queue active)"@evil.example')
+        self.assertEqual(events["delivery"]["recipient"], '"odd>name"@local.example')
+        self.assertEqual(events["delivery"]["orig_to"], '"alias>x"@local.example')
+        self.assertTrue(result["completeness"]["complete"])
+
+    def test_queue_ids_follow_postfix_grammar_so_daemon_faults_are_visible(self):
+        result = self.analyze(
+            "2026-11-02T09:20:00Z box postfix/smtpd[2]: warning: hostname mx.partner.example does not resolve to address 192.0.2.9\n"
+            "2026-11-02T09:20:01Z box postfix/smtpd[2]: fatal: open /etc/postfix/main.cf: Permission denied\n"
+            "2026-11-02T09:20:02Z box postfix/smtpd[2]: NOQUEUE: filter: RCPT from unknown[192.0.2.5]: <office@local.example>: Recipient address triggers FILTER smtp:[127.0.0.1]:10025; from=<a@partner.example> to=<office@local.example> proto=ESMTP helo=<x>\n")
+        self.assertEqual(result["statistics"]["queues"], 0)
+        self.assertEqual(result["statistics"]["daemon_warnings"], 1)
+        self.assertIn("MAIL-DAEMON-ERROR", [f["id"] for f in result["findings"]])
+        self.assertEqual(result["completeness"]["unparsed_lines"], 1)  # NOQUEUE filter is not modeled
+
+    def test_client_port_logging_and_sasl_sender(self):
+        result = self.analyze(
+            "2026-11-02T09:20:00Z box postfix/smtpd[2]: ABCDE: client=mx.partner.example[192.0.2.5]:41234\n"
+            "2026-11-02T09:20:01Z box postfix/smtpd[2]: BCDEF: client=laptop.partner.example[192.0.2.7], sasl_method=PLAIN, sasl_username=office@local.example, sasl_sender=office@local.example\n")
+        self.assertEqual(result["statistics"]["top_authenticated_senders"], {"office@local.example": 1})
+        self.assertEqual(sorted(e["client_ip"] for e in result["evidence"]), ["192.0.2.5", "192.0.2.7"])
+
+    def test_miab_submission_syslog_name_joins_one_trace(self):
+        result = self.analyze(
+            "2026-11-02T09:20:00Z box postfix/submission/smtpd[7]: warning: unknown[192.0.2.5]: SASL LOGIN authentication failed: UGFzc3dvcmQ6\n"
+            "2026-11-02T09:20:01Z box postfix/submission/smtpd[7]: ABCDE: client=laptop.partner.example[192.0.2.7], sasl_method=PLAIN, sasl_username=office@local.example\n"
+            "2026-11-02T09:20:02Z box postfix/cleanup[8]: ABCDE: message-id=<one@local.example>\n"
+            "2026-11-02T09:20:03Z box postfix/qmgr[9]: ABCDE: from=<office@local.example>, size=3, nrcpt=1 (queue active)\n"
+            "2026-11-02T09:20:04Z box postfix/smtp[10]: ABCDE: to=<one@remote.example>, relay=mx.remote.example[192.0.2.2]:25, delay=1, delays=0/0/0/1, dsn=2.0.0, status=sent (250 ok)\n")
+        stats = result["statistics"]
+        self.assertEqual((stats["queues"], stats["auth_failures"]), (1, 1))
+        self.assertEqual(stats["top_authenticated_senders"], {"office@local.example": 1})
+        trace = result["traces"][0]
+        self.assertEqual(trace["instance"], "postfix")
+        self.assertEqual(trace["events"][0]["service"], "submission")
+        self.assertEqual(trace["events"][0]["component"], "smtpd")
+
+    def test_local_submission_notifications_and_session_problems_are_known(self):
+        result = self.analyze(
+            "2026-11-02T09:20:00Z box postfix/pickup[4]: ABCDE: uid=0 from=<root>\n"
+            "2026-11-02T09:20:01Z box postfix/bounce[5]: ABCDE: sender non-delivery notification: BCDEF\n"
+            "2026-11-02T09:20:02Z box postfix/smtp[6]: CDEF0: lost connection with mx.remote.example[192.0.2.2] while sending end of data -- message may be sent more than once\n"
+            "2026-11-02T09:20:03Z box postfix/smtp[6]: DEF01: conversation with mx.remote.example[192.0.2.2] timed out while receiving the initial server greeting\n")
+        kinds = sorted(e["kind"] for trace in result["traces"] for e in trace["events"])
+        self.assertEqual(kinds, ["notification", "pickup", "session_problem", "session_problem"])
+        pickup = next(e for trace in result["traces"] for e in trace["events"] if e["kind"] == "pickup")
+        self.assertEqual((pickup["sender"], pickup["uid"]), ("root", 0))
+        self.assertTrue(result["completeness"]["complete"])
 
 
 if __name__ == "__main__":

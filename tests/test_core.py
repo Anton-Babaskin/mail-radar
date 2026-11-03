@@ -127,7 +127,7 @@ class StoreTests(unittest.TestCase):
 
     def test_metadata_only_trash_and_untrusted_header_interval(self):
         from argparse import Namespace
-        record = {"mailbox": "Trash", "date.received": "2026-11-02 13:25:34", "date.saved": "2026-11-02 13:26:00", "hdr.date": "Mon, 2 Nov 2026 12:19:20 +0300", "hdr.received": "from edge.example by filter.example; Mon, 2 Nov 2026 14:25:32 +0500"}
+        record = {"mailbox": "Trash", "hdr.message-id":"<one@example.org>", "date.received.unixtime":1793611534, "date.received": "2026-11-02 13:25:34", "date.saved": "2026-11-02 13:26:00", "hdr.date": "Mon, 2 Nov 2026 12:19:20 +0300", "hdr.received": "from edge.example by filter.example; Mon, 2 Nov 2026 14:25:32 +0500"}
         class Fake:
             def __init__(self):
                 self.calls = []
@@ -169,8 +169,9 @@ class CLITests(unittest.TestCase):
             cli.main(["--diagnose", "--offline", "--log", str(fixture), "--since", "2026-11-02T09:00:00Z", "--until", "2026-11-02T10:00:00Z"])
         text = output.getvalue()
         self.assertIn("подтверждено сохранение", text)
-        self.assertIn('"delay": 2.9', text)
-        self.assertLess(text.index("подтверждено сохранение"), text.index("LOG-COVERAGE"))
+        self.assertIn('Postfix delay=2.9 с', text)
+        self.assertNotIn('"delay":',text)
+        self.assertLess(text.index("подтверждено сохранение"),text.index("Источники:"))
 
     def test_unsafe_user_and_mutually_incompatible_flags_are_cli_errors(self):
         for argv in (["--diagnose", "--from", "a@example.org;touch /tmp/x"], ["--offline", "--network", "--log", "fixture"], ["--headers", "<one@example.org>"], ["--hours", "nan"], ["--mailboxes", "--user", "*@example.org"], ["--diagnose", "--to", "?@example.org"]):

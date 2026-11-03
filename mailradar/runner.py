@@ -46,7 +46,7 @@ def permitted(argv):
         if args and args[0] == "is-active":
             return len(args) == 2 and bool(re.fullmatch(r"[\w@.-]+", args[1]))
         if args and args[0] == "show":
-            return len(args) >= 3 and bool(re.fullmatch(r"[\w@.-]+", args[1])) and all(a in ("--value", "--no-pager", "--property=LoadState,ActiveState,SubState", "--property=ExecStart", "--property=LoadState", "--property=ActiveState", "--property=SubState") for a in args[2:])
+            return len(args) >= 3 and bool(re.fullmatch(r"[\w@.-]+", args[1])) and all(a in ("--value", "--no-pager", "--property=LoadState,ActiveState,SubState", "--property=ExecStart", "--property=MainPID", "--property=LoadState", "--property=ActiveState", "--property=SubState") for a in args[2:])
         return args in (["list-unit-files", "--type=service", "--no-legend", "--no-pager"], ["list-unit-files", "--no-legend", "--no-pager"])
     if cmd == "df":
         return len(args) <= 10 and all(a in ("-P", "-Pi", "-h", "-i", "--output=pcent,target", "--output=ipcent,target", "/", "/home", "/home/user-data") for a in args)
@@ -95,7 +95,7 @@ def permitted(argv):
             return "-connect" in args
         return args in (["version"], ["x509", "-noout", "-dates", "-subject"])
     if cmd == "journalctl":
-        return len(args) <= 16 and args[:3] == ["--no-pager", "-o", "short-iso-precise"] and all(a in ("--since", "--until", "-u", "postfix", "dovecot", "postgrey") or bool(re.fullmatch(r"[0-9T:.+ Z-]{1,50}", a)) for a in args[3:])
+        return len(args) <= 20 and args[:3] == ["--no-pager", "-o", "short-iso-precise"] and all(a in ("--reverse", "--since", "--until", "-u", "postfix", "postfix@*.service", "dovecot", "postgrey") or bool(re.fullmatch(r"[0-9T:.+ Z-]{1,50}", a)) for a in args[3:])
     if cmd == "curl":
         return args == ["--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", "--connect-timeout", "2", "--max-time", "4", "http://127.0.0.1:10222/"]
     if cmd == "doveadm":
@@ -104,7 +104,7 @@ def permitted(argv):
         if args[:3] == ["quota", "get", "-u"]:
             return len(args) == 4 and valid_user(args[3])
         if args[:4] == ["-f", "json", "fetch", "-u"] and len(args) >= 9 and valid_user(args[4]):
-            if not set(args[5].split()) <= {"mailbox", "uid", "guid", "date.received", "date.saved", "hdr.date", "hdr.received", "hdr.message-id", "flags"}:
+            if not set(args[5].split()) <= {"mailbox", "uid", "guid", "date.received", "date.saved", "date.received.unixtime", "date.saved.unixtime", "hdr.date", "hdr.received", "hdr.message-id", "flags"}:
                 return False
             rest, i = args[6:], 0
             while i < len(rest):
