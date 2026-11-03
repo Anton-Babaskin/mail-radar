@@ -1,134 +1,17 @@
+Generated from examples/mail.log (synthetic documentation addresses only).
+Command: python3 -m mailradar.cli --trace sender.example --offline --log examples/mail.log --since 2026-11-02T09:00:00Z --until 2026-11-02T10:00:00Z
+Exit: 1 (UNKNOWN log coverage is expected for this short fixture).
 
-  ███╗   ███╗██╗ █████╗ ██████╗       ██████╗  █████╗ ██████╗  █████╗ ██████╗
-  ████╗ ████║██║██╔══██╗██╔══██╗      ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔══██╗
-  ██╔████╔██║██║███████║██████╔╝      ██████╔╝███████║██║  ██║███████║██████╔╝
-  ██║╚██╔╝██║██║██╔══██║██╔══██╗      ██╔══██╗██╔══██║██║  ██║██╔══██║██╔══██╗
-  ██║ ╚═╝ ██║██║██║  ██║██████╔╝      ██║  ██║██║  ██║██████╔╝██║  ██║██║  ██║
-  ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝╚═════╝       ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-                                                                    by Anton Babaskin
-
-  Host: box.div-celik.com  IPv4: 37.60.253.99  IPv6: none
-  MIAB: v75  Period: last 24h  Up: up 23 weeks, 5 days, 23 hours, 9 minutes
-  Load: 0.10 0.07 0.06  2026-04-22 13:57:25
-
-
-══ SERVICES ══
- ✔  Postfix (SMTP): running
- ✔  Dovecot (IMAP): running
- ✔  Nginx (Web): running
- ✔  Fail2ban: running
- ✔  NSD (DNS): running
- ✔  OpenDKIM: running
- ✔  Postgrey: running
- ✔  SpamPD: running
- ✔  PHP-FPM: running (php8.0-fpm)
-
-══ BLACKLIST STATUS ══
- ✔  Spamhaus ZEN (IPv4)
- ✔  SpamCop     (IPv4)
- ✔  Barracuda   (IPv4)
- ✔  SORBS       (IPv4)
- ✔  Spamhaus DBL (box.mailserver.com)
- ✔  Spamhaus DBL (box.mailserver.com)
-
-══ DNS RECORDS ══
- ✔  PTR (rDNS): box.mailserver.com
- ✔  SPF: "v=spf1 mx -all"
- ✔  DKIM: mail._domainkey.box.mailserver.com
- ✔  DMARC: "v=DMARC1; p=quarantine; rua=mailto:me@mailserver.com; ruf=mailto:mailserver.com; fo=1;"
- ✔  MTA-STS: configured
- ✔  DANE/TLSA: configured
- ✔  MX records:
-     10 box.mailserver.com.
-
-══ TLS CERTIFICATE ══
- ✔  TLS valid (587/STARTTLS): 72d left — CN = box.mailserver.com
-
-══ DISK SPACE ══
- ✔  /: 10% used
- →  Total /home/user-data: 32G
-
-══ MAIL QUEUE ══
- ✔  Queue is empty
-
-══ BRUTE FORCE — last 24h ══
- ✔  No brute force attempts found
-
-══ FAIL2BAN ══
- ✔  postfix-sasl: 0 banned, 0 failed
- ✔  dovecot: 0 banned, 0 failed
- ⚠  sshd: 3 banned, 7 failed | 2.57.121.112 45.148.10.152 213.209.159.158
- ✔  recidive: 0 banned, 4 failed
-
-══ SECURITY HARDENING ══
- ⚠  SSH: PermitRootLogin yes
- ⚠  SSH: PasswordAuth yes (default)
- →  SSH: port 22 (default)
- ✔  Unattended-upgrades: installed
- ✘  Postfix: reject_unauth_destination not found!
- →  Listening ports: 22 25 53 80 143 443 465 587 953 993 995 4190 4949 8891 8893 8952 10023 10025 10026 10222 12340
-
-══ RELAY STATUS ══
- →  Relay: disabled (direct send)
-
-══ OUTGOING — top senders (all logs) ══
-  Count   From
-  30     info@mailserver.com
-  9      office@mailserver.com
-  8      finans@mailserver.com
-  3      me@mailserver.com
-  2      tester@mailserver.com
-
-══ OUTGOING — top recipients (all logs) ══
-  Count   To (domain)
-  295      mailserver.com
-  34      google.com
-  20      apple.com
-  8      box.mailserver.com
-  6      yandex.com
-  4      yahoo.com
-  4      protonmail.com
-  3      namecheap.com
-  1      srv1.mail-tester.com
-  1      bing.com
-
-══ BOUNCED / DEFERRED — last 24h ══
- ✔  Bounced:  0
- ✘  Deferred: 72
-
-  Top deferred reasons:
-  40  (TLS is required, but was not offered by host mx5.yahoo.com[168.20.128.92])
-  32  (TLS is required, but was not offered by host mx7.yahoo.com[168.20.128.92])
-
-══ REJECTED INCOMING — last 24h ══
- →  Total rejected: 4
-
-  Top rejection reasons:
-  1  RCPT from unknown[77.83.39.241]: 554 5.7.1 <peterpan510@rocketmail.com>: Relay a
-  1  RCPT from unknown[141.98.9.62]: 554 5.7.1 <spameri@tiscali.it>: Relay access den
-  1  RCPT from unknown[141.98.9.105]: 554 5.7.1 <spameri@tiscali.it>: Relay access de
-
-══ MAILBOXES ══
-
-  mail tester.com(1.6g)
-  office  1.6G  (~2126 msgs, last: 2026-04-22)
-
-
-══ BACKUP STATUS ══
- ✔  Last backup: today (1.6g)
-
-══ RECOMMENDATIONS ══
-
-  1. SSH: set PermitRootLogin prohibit-password in sshd_config
-  2. SSH: set PasswordAuthentication no (use key auth only)
-  3. CRITICAL: Add reject_unauth_destination to smtpd_recipient_restrictions
-  4. Many deferred (72) — check remote server connectivity
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  SUMMARY: 32 OK / 3 WARN / 2 FAIL  (37 checks)
-  ⚡ Action required — 2 issue(s) need attention
-  ↑ 4 recommendation(s) — scroll up to ══ RECOMMENDATIONS ══
-
-  miab-radar v3.0 | github.com/Anton-Babaskin/miab-radar | 2026-04-22 13:57
-  by Anton Babaskin — suggestions, bugs? Open an issue on GitHub
-
+MailRadar 4.0.0 — UNKNOWN
+Период: 2026-11-02T09:00:00+00:00 — 2026-11-02T10:00:00+00:00; фильтры: {"trace": "sender.example"}
+[OK] ABC123 → office@example.com: подтверждено сохранение; текущая папка требует Dovecot-поиска
+  Подтверждение: {"source": "examples/mail.log", "line": 4, "time": "2026-11-02T09:12:02+00:00", "text": "2026-11-02T09:12:02+00:00 box postfix/lmtp[103]: ABC123: to=<office@example.com>, relay=box[private/dovecot-lmtp], delay=2, delays=0.1/0.1/0.2/1.6, dsn=2.0.0, status=sent (250 2.0.0 Saved)", "dsn": "2.0.0", "delay": 2.0, "delays": {"arrival_to_last_active": 0.1, "last_active_to_connection_setup": 0.1, "connection_setup": 0.2, "message_transmission": 1.6}, "relay": "box[private/dovecot-lmtp]"}
+[UNKNOWN] Границы доступных логов не доказывают полноту периода (LOG-COVERAGE)
+  Далее: При отсутствии события запросите более ранние архивы или trace соседнего SMTP-узла.
+[OK] Наблюдаемый путь почты разобран (MAIL-FLOW)
+  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 1, "text": "2026-11-02T09:12:00+00:00 box postfix/smtpd[100]: ABC123: client=mx.sender.example[203.0.113.10]", "kind": "client", "host": "box", "instance": "postfix", "program": "postfix/smtpd", "component": "smtpd", "queue_id": "ABC123", "client_name": "mx.sender.example", "client_ip": "203.0.113.10"}
+  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 2, "text": "2026-11-02T09:12:00+00:00 box postfix/cleanup[101]: ABC123: message-id=<sample.1@sender.example>", "kind": "message_id", "host": "box", "instance": "postfix", "program": "postfix/cleanup", "component": "cleanup", "queue_id": "ABC123", "message_id": "<sample.1@sender.example>"}
+  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 3, "text": "2026-11-02T09:12:00+00:00 box postfix/qmgr[102]: ABC123: from=<sender@sender.example>, size=1900, nrcpt=1 (queue active)", "kind": "accepted", "host": "box", "instance": "postfix", "program": "postfix/qmgr", "component": "qmgr", "queue_id": "ABC123", "sender": "sender@sender.example", "size": 1900, "recipient_count": 1, "queue_state": "queue active"}
+  Далее: Удалённый SMTP 250 не доказывает внешний INBOX; Saved не доказывает текущую папку.
+Статистика: {"events": 5, "recognized_events": 5, "queues": 1, "observed_messages": 1, "delivery_attempts": 1, "recipient_delivery_events": 1, "accepted_queue_events": 1, "rejected_before_queue": 0, "auth_failures": 0, "saved_log_events": 0, "expired": 0, "hold": 0, "bounced": 0, "deferred": 0, "outcomes": {"saved": 1}, "top_authenticated_senders": {}, "top_recipient_domains": {"example.com": 1}, "delivery_reasons": {"bounced": {}, "deferred": {}}, "top_rejection_reasons": {}, "top_auth_failure_ips": {}, "overlap_events_removed": 0, "year_inferred_lines": 0}
+Доказательства заканчиваются наблюдаемыми источниками. SMTP 250 не подтверждает внешний INBOX; Saved не доказывает текущую папку.

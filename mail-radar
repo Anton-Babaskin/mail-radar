@@ -1,0 +1,9 @@
+#!/bin/bash
+set -eu
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+if [[ -d "$SCRIPT_DIR/mailradar" ]]; then
+    MODULE_DIR="$SCRIPT_DIR"
+else
+    MODULE_DIR="$SCRIPT_DIR/../lib/mail-radar"
+fi
+exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from mailradar.cli import main; sys.exit(main(sys.argv[2:]))' "$MODULE_DIR" "$@"

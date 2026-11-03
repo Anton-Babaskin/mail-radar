@@ -1,0 +1,6 @@
+2026-11-02T09:12:00+00:00 box postfix/smtpd[100]: ABC123: client=mx.sender.example[203.0.113.10]
+2026-11-02T09:12:00+00:00 box postfix/cleanup[101]: ABC123: message-id=<sample.1@sender.example>
+2026-11-02T09:12:00+00:00 box postfix/qmgr[102]: ABC123: from=<sender@sender.example>, size=1900, nrcpt=1 (queue active)
+2026-11-02T09:12:02+00:00 box postfix/lmtp[103]: ABC123: to=<office@example.com>, relay=box[private/dovecot-lmtp], delay=2, delays=0.1/0.1/0.2/1.6, dsn=2.0.0, status=sent (250 2.0.0 Saved)
+2026-11-02T09:12:02+00:00 box dovecot: lmtp(office@example.com)<103><session1>: msgid=<sample.1@sender.example>: saved mail to INBOX
+2026-11-02T09:12:02+00:00 box postfix/qmgr[102]: ABC123: removed
