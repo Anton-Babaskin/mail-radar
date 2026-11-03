@@ -159,3 +159,10 @@ remain UNKNOWN. External delivery and historical completeness are not inferred.
 See `docs/miab-audit-2026-11-03.ru.md` for the source-confirmed findings, corrected
 semantics and residual limits. Direct execution of 4.0.1 on the owner's live
 MIAB is still not claimed by these isolated checks.
+
+GitHub Actions was also verified for PR #7 at
+`59fff645d288af124161710ead9dbc99d38ed806`:
+[run41626003559](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41626003559)
+completed successfully on both Python3.9 and3.10, with **158 tests per job**,
+Bash syntax and ShellCheck. A subsequent cleanup only removes a trailing blank
+line and records this result; no diagnostic behavior changes.

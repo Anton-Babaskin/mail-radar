@@ -29,5 +29,3 @@ def timestamp(value, zone):
             raise ValueError("Неоднозначное/несуществующее локальное время: укажите UTC offset")
         result = first
     return result.astimezone(timezone.utc)
-
-
