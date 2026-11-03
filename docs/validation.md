@@ -165,6 +165,8 @@ from Postfix sources, MIAB's `setup/mail-postfix.sh` and synthetic fixtures.
 
 No test here establishes delivery to an external INBOX, validates production
 service configuration, completes a backup/restore, reboots a route, exercises
-public DNSBLs/banks, sends mail or tests a real open relay. Real-world deployment
+public DNSBLs/banks, sends mail or tests a real open relay. The one-off DNS probe
+above queried only Spamhaus' documented test names, outside the test suite, and
+does not show how a production host's resolver is treated. Real-world deployment
 and mail-stack-specific integration validation remain administrator work after
 review. No release or deployment is part of this change.
