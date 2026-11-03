@@ -16,6 +16,13 @@
 * Consolidate reviewed parser and DNSBL changes from PRs #5/#6, including named
   operator failures and static Postfix reply-filter inspection.
 * Add production-shaped synthetic fixtures and real-PTY session regressions.
+* Inspect Spamhaus DQS error filters, HELO/DATA restriction chains, postscreen
+  weights/threshold/action/allowlist and master overrides; mark indirect access
+  map/class coverage unknown. Reject IP literals passed as --domain.
+* Recognize prequeue FILTER/HOLD/DISCARD requests, cleanup header warnings and
+  standalone SMTP replies without inventing delivery or exposing header text.
+* Add pinned Ruff checks and actual dnsutils loopback integration to CI; repair
+  audit commit references after the attribution-only history rewrite.
 
 ## 4.0.0 — unreleased
 

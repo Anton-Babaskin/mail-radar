@@ -40,6 +40,7 @@ DELIVERY_TAIL = re.compile(
     r"dsn=([245]\.\d+\.\d+), status=(sent|deferred|bounced)(?: \((.*)\))?$")
 CLIENT = re.compile(r"client=([^\s\[\]]+)\[([^\]]+)\](?::\d+)?(?:, sasl_method=([^,\s]+), sasl_username=([^,\s]+))?(?:, sasl_sender=.*)?")
 REJECT = re.compile(r"^NOQUEUE: (reject|reject_warning): (\S+) from ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?: ([45]\d\d) (.*)$")
+POLICY_ACTION = re.compile(r"^NOQUEUE: (filter|hold|discard): (\S+) from ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?: (.*)$")
 REJECT_END = re.compile(r"(?:proto=[A-Z]+(?: helo=<[^>]*>)?|helo=<[^>]*>)?")
 NOTIFICATION = re.compile(r"(sender|postmaster) (non-delivery|delivery status|delay) notification: (\S+)")
 DELAYS = ("arrival_to_last_active", "last_active_to_connection_setup",
@@ -308,7 +309,12 @@ def _parse_reject(body):
     head = REJECT.match(body)
     if not head or not _ip(head[4]):
         return None
-    text = head[6]
+    tail = _policy_tail(head[6])
+    return (head, *tail) if tail else None
+
+
+def _policy_tail(text):
+    """Split the fixed smtpd log_whatsup tail from untrusted policy text."""
     position = len(text)
     for _ in range(64):
         position = text.rfind("; ", 0, position)
@@ -319,7 +325,7 @@ def _parse_reject(body):
             fields = _reject_fields(tail)
             if fields is not None and _address(fields.get("from", ""), True) and (
                     "to" not in fields or _address(fields["to"])):
-                return head, text[:position], fields
+                return text[:position], fields
     return None  # adversarial separator count: leave this line explicitly unparsed
 
 
@@ -429,6 +435,15 @@ def _parse_event(timestamp, rest, source, line_no, text):
             # CONNECT/HELO-stage rejects carry no envelope; absent fields stay absent.
             event.update({name: fields[key] for name, key in (("sender", "from"), ("recipient", "to")) if key in fields})
             event.pop("_unparsed", None)
+        else:
+            head = POLICY_ACTION.fullmatch(body)
+            tail = _policy_tail(head[5]) if head and _ip(head[4]) else None
+            if tail:
+                reason, fields = tail
+                event.update(kind="policy_action", action=head[1], stage=head[2],
+                             client_name=head[3], client_ip=_ip(head[4]), reason=_clean(reason))
+                event.update({name: fields[key] for name, key in (("sender", "from"), ("recipient", "to")) if key in fields})
+                event.pop("_unparsed", None)
         return event
     qid, separator, payload = body.partition(": ")
     if not separator or not _queue_id(qid):
@@ -442,6 +457,12 @@ def _parse_event(timestamp, rest, source, line_no, text):
         return event
     event["queue_id"] = qid
     event["_unparsed"] = True
+    remote_reply = re.fullmatch(r"host ([^\s\[\]]+)\[([^\]]+)\](?::\d+)?:? said: ([245]\d\d)(?:[ -]([245]\.\d{1,3}\.\d{1,3}))? .+", payload)
+    if component in ("smtp", "lmtp") and remote_reply and _ip(remote_reply[2]):
+        # A standalone reply does not identify a recipient or prove delivery.
+        event.update(kind="remote_reply", smtp_code=int(remote_reply[3]), remote_host=remote_reply[1], remote_ip=_ip(remote_reply[2]))
+        if remote_reply[4]:
+            event["dsn"] = remote_reply[4]
     if component == "cleanup":
         mid = re.fullmatch(r"message-id=(<[^<>\s]{0,500}>)", payload)
         if mid:
@@ -501,6 +522,9 @@ def _parse_event(timestamp, rest, source, line_no, text):
     if component == "cleanup" and payload.startswith("hold: "):
         event["kind"] = "hold"
         event["text"] = "%s: hold: [header content omitted]" % qid
+    if component == "cleanup" and payload.startswith("warning: header "):
+        event["kind"] = "header_warning"
+        event["text"] = "%s: warning: header [header content omitted]" % qid
     if event["kind"] == "other":
         # Do not turn arbitrary diagnostic/header text into a phantom queue.
         event.pop("queue_id", None)
@@ -820,6 +844,7 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                   "top_rejection_reasons": dict(Counter(e["reason"] for e in visible if e["kind"] == "rejected").most_common(10)),
                   "top_auth_failure_ips": dict(Counter(e["client_ip"] for e in visible if e["kind"] == "auth_failure").most_common(10)),
                   "reject_warnings": kinds.get("reject_warning", 0),
+                  "prequeue_policy_actions": dict(Counter(e["action"] for e in visible if e["kind"] == "policy_action")),
                   "daemon_warnings": sum(1 for e in visible if e.get("severity") == "warning"),
                   "overlap_events_removed": overlap, "year_inferred_lines": inferred}
     evidence = [_event_public(e) for e in meaningful[:500]]
@@ -851,6 +876,14 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
         findings.append(_finding("MAIL-PREQUEUE-REJECT", "WARN" if filters else "OK", "Есть отказы до приёма в очередь" if filters else "Отказы до очереди учтены; блокировка relay/спама сама по себе не сбой",
                                  [_event_public(e) for e in visible if e["kind"] == "rejected"][:10],
                                  "Сверьте стадию отказа и restriction chain: Queue ID ещё мог не появиться."))
+    if kinds.get("policy_action"):
+        findings.append(_finding("MAIL-PREQUEUE-POLICY", "OK", "Postfix запросил FILTER/HOLD/DISCARD до очереди",
+                                 [_event_public(e) for e in visible if e["kind"] == "policy_action"][:10],
+                                 "Это запрос действия SMTP-политики. Фактический hold/discard, принятие и доставку подтверждайте последующими событиями."))
+    if kinds.get("header_warning"):
+        findings.append(_finding("MAIL-HEADER-WARNING", "WARN", "Сработало предупреждение cleanup о заголовке",
+                                 [_event_public(e) for e in visible if e["kind"] == "header_warning"][:10],
+                                 "Содержимое заголовка исключено из отчёта; предупреждение не доказывает отказ доставки."))
     if kinds.get("auth_failure"):
         findings.append(_finding("MAIL-AUTH-FAILURE", "FAIL" if kinds["auth_failure"] > 100 else "WARN",
                                  "Видны неудачные SMTP-аутентификации",

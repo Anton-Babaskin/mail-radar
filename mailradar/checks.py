@@ -30,6 +30,9 @@ _PARAMS = (
     "myhostname", "mydomain", "smtpd_recipient_restrictions",
     "smtpd_relay_restrictions", "smtpd_client_restrictions",
     "smtpd_sender_restrictions", "parent_domain_matches_subdomains",
+    "smtpd_helo_restrictions", "smtpd_data_restrictions", "smtpd_end_of_data_restrictions",
+    "smtpd_restriction_classes", "postscreen_dnsbl_sites", "postscreen_dnsbl_threshold", "postscreen_dnsbl_action",
+    "postscreen_dnsbl_allowlist_threshold",
     "relayhost", "transport_maps", "smtpd_sender_login_maps",
     "smtpd_tls_security_level", "smtp_tls_security_level",
     "queue_directory",
@@ -40,7 +43,7 @@ def clean(value, limit=1500):
     value = report_clean(value, limit)
     value = re.sub(r"(?i)(://)[^/@\s]+:[^/@\s]+@", r"\1[redacted]@", value)
     value = re.sub(r"(?i)((?:password|secret|token)\s*[=:]\s*)\S+", r"\1[redacted]", value)
-    value = re.sub(r"(?i)\b[a-z0-9_-]+\.(?=(?:zen|dbl|sbl|xbl|pbl|zrd|authbl)\.dq\.spamhaus\.net\b)", "[DQS-key].", value)
+    value = re.sub(r"(?i)\b[a-z0-9_-]+\.(?=[a-z0-9_-]+\.dq\.spamhaus\.net\b)", "[DQS-key].", value)
     return value[:limit]
 
 
@@ -354,7 +357,7 @@ def postfix_checks(ctx):
         result = ctx.run(argv)
         if result.ok and not result.truncated and len(result.stdout) <= 32768:
             ctx.postconf[param] = result.stdout.strip()
-    base = {k: ctx.postconf.get(k) for k in ("smtpd_recipient_restrictions", "smtpd_relay_restrictions", "smtpd_client_restrictions", "smtpd_sender_restrictions")}
+    base = {k: ctx.postconf.get(k) for k in ("smtpd_recipient_restrictions", "smtpd_relay_restrictions", "smtpd_client_restrictions", "smtpd_sender_restrictions", "smtpd_helo_restrictions", "smtpd_data_restrictions", "smtpd_end_of_data_restrictions", "smtpd_restriction_classes")}
     if base["smtpd_recipient_restrictions"] is None or base["smtpd_relay_restrictions"] is None:
         ctx.add("POSTFIX.CONFIG", "UNKNOWN", "Ограничения Postfix прочитаны не полностью",
                 [command_evidence(["postconf", "-h", key], ctx.run(["postconf", "-h", key]))
@@ -370,7 +373,7 @@ def postfix_checks(ctx):
     if overrides.ok and not overrides.truncated:
         omitted = 0
         for line in overrides.stdout.splitlines():
-            match = re.match(r"^([^\s/=]+/[^\s/=]+)/(smtpd_(?:recipient|relay|client|sender)_restrictions)\s*=\s*(.*)$", line)
+            match = re.match(r"^([^\s/=]+/[^\s/=]+)/(smtpd_(?:(?:recipient|relay|client|sender|helo|data|end_of_data)_restrictions|restriction_classes))\s*=\s*(.*)$", line)
             if match and (match[1] in contexts or len(contexts) < 81):
                 contexts.setdefault(match[1], dict(base))[match[2]] = match[3]
             elif match:
@@ -689,23 +692,37 @@ def rbl_filter_matches(pattern, address):
     Each d is a number or, since Postfix 2.8, ``[...]`` with ``;``-separated
     numbers and ``n..m`` ranges. None means the filter is not understood.
     """
-    match = re.fullmatch(r"\.".join([_RBL_OCTET] * 4), pattern)
+    match = re.fullmatch(r"\.".join([_RBL_OCTET] * 4), pattern) if len(pattern) <= 512 else None
     if not match:
         return None
-    for part, value in zip(match.groups(), map(int, address.split("."))):
-        if part.isdigit():
-            if int(part) != value:
-                return False
-            continue
-        hit = False
-        for item in part[1:-1].split(";"):
+    octets = []
+    for part in match.groups():
+        ranges = []
+        for item in ([part] if part.isdigit() else part[1:-1].split(";")):
             bounds = item.split("..")
-            if len(bounds) > 2 or not all(b.isdigit() for b in bounds):
+            if len(bounds) > 2 or not all(b.isdigit() and len(b) <= 3 for b in bounds):
                 return None
-            hit = hit or int(bounds[0]) <= value <= int(bounds[-1])
-        if not hit:
-            return False
-    return True
+            low, high = int(bounds[0]), int(bounds[-1])
+            if not 0 <= low <= high <= 255:
+                return None
+            ranges.append((low, high))
+        octets.append(ranges)
+    return all(any(low <= value <= high for low, high in ranges)
+               for ranges, value in zip(octets, map(int, address.split("."))))
+
+
+def _spamhaus_zone(zone):
+    return zone.endswith((".spamhaus.org", ".dq.spamhaus.net"))
+
+
+def _zone_error_codes(zone):
+    # DQS documents the entire /24 as errors. Public mirror meanings below
+    # must not be assigned to a DQS key/account error with the same octet.
+    codes = (["127.255.255." + str(n) for n in range(256)]
+             if zone.endswith(".dq.spamhaus.net") else sorted(_DNSBL_ERRORS))
+    if zone.startswith("dbl.") or ".dbl.dq.spamhaus.net" in zone:
+        codes = codes + [_DBL_IP_QUERY]
+    return codes
 
 
 def dnsbl_filter_checks(ctx, contexts):
@@ -724,12 +741,19 @@ def dnsbl_filter_checks(ctx, contexts):
             for i, token in enumerate(tokens[:-1]):
                 zone, _, pattern = tokens[i + 1].partition("=")
                 zone = zone.lower().rstrip(".")
-                if token not in _RBL_RESTRICTIONS or not (zone == "spamhaus.org" or zone.endswith(".spamhaus.org")):
+                if token not in _RBL_RESTRICTIONS or not _spamhaus_zone(zone):
                     continue
                 key = (token, zone, pattern)
-                seen.setdefault(key, []).append(name + "/" + parameter)
+                if key not in seen and len(seen) >= 80:
+                    unparsed = True
+                    continue
+                places = seen.setdefault(key, [])
+                if len(places) < 80:
+                    places.append(name + "/" + parameter)
+                else:
+                    unparsed = True
     for (restriction, zone, pattern), places in sorted(seen.items()):
-        codes = sorted(_DNSBL_ERRORS) + ([_DBL_IP_QUERY] if zone.split(".")[0] == "dbl" else [])
+        codes = _zone_error_codes(zone)
         verdicts = {code: rbl_filter_matches(pattern, code) if pattern else True for code in codes}
         accepted = [code for code, hit in verdicts.items() if hit]
         rule = restriction + " " + zone + ("=" + pattern if pattern else "")
@@ -739,7 +763,7 @@ def dnsbl_filter_checks(ctx, contexts):
         elif accepted:
             status = "WARN"
             title = rule + ": " + ("нет фильтра кодов ответа" if not pattern else "фильтр пропускает " + ", ".join(accepted)) + "; ошибка Spamhaus станет отказом"
-            next_step = ("Без фильтра Postfix считает listing любой A-ответ, включая 127.255.255.252/254/255 публичных зеркал Spamhaus; "
+            next_step = ("Без фильтра Postfix считает listing любой A-ответ, включая 127.255.255.252/254/255 публичных зеркал Spamhaus и ошибки DQS из 127.255.255.0/24; "
                          "при заблокированном resolver это может отклонять клиентов, дошедших до данного правила. Задайте фильтр по кодам listing "
                          "(как в MIAB: zen.spamhaus.org=127.0.0.[2..11], dbl.spamhaus.org=127.0.1.[2..99]); Radar конфигурацию не меняет.")
         else:
@@ -751,10 +775,78 @@ def dnsbl_filter_checks(ctx, contexts):
                 contexts=[clean(p) for p in places[:80]], error_codes_accepted=accepted)
     if unparsed or not seen:
         ctx.add("DNSBL.POSTFIX_FILTER", "UNKNOWN" if unparsed else "N/A",
-                "Публичные зоны Spamhaus в restrictions Postfix: " + ("часть цепочек не прочитана или не разобрана" if unparsed else "не используются"),
-                [{"source": "postconf", "text": "selected smtpd_{client,sender,recipient,relay}_restrictions"}],
-                "Restriction classes, access-map actions, smtpd_helo/data_restrictions и postscreen_dnsbl_sites здесь не разбираются.",
+                "Зоны Spamhaus в restrictions Postfix: " + ("часть цепочек не прочитана или не разобрана" if unparsed else "не используются"),
+                [{"source": "postconf", "text": "selected smtpd client/sender/recipient/relay/helo/data/end_of_data restrictions"}],
+                "Restriction classes и действия access maps не раскрываются; postscreen проверяется отдельно.",
                 coverage=True)
+    indirect = bool(ctx.postconf.get("smtpd_restriction_classes")) or any(config.get("smtpd_restriction_classes") for config in contexts.values()) or any(
+        re.search(r"\bcheck_\w+_access\b", value or "") for config in contexts.values() for value in config.values())
+    if indirect:
+        ctx.add("DNSBL.INDIRECT_COVERAGE", "UNKNOWN", "DNSBL внутри restriction classes и действий access maps не проверены",
+                next_step="Проверьте косвенные ограничения вручную. Карты могут зависеть от клиента; credential maps не читаются.")
+    postscreen_dnsbl_checks(ctx)
+
+
+def postscreen_dnsbl_checks(ctx):
+    """Bounded static review; a weight applies once per site, not per A record.
+
+    Negative weights and other listings mean an error score is only a bound,
+    never a prediction that every client will be rejected.
+    """
+    master = ctx.run(["postconf", "-M"])
+    rows = master.stdout.splitlines()
+    if not master.ok or len(rows) > 200:
+        ctx.add("DNSBL.POSTSCREEN", "UNKNOWN", "Сервисы postscreen не подтверждены", [command_evidence(["postconf", "-M"], master)])
+        return
+    services = [f[0] + "/" + f[1] for row in rows if len(f := row.split()) >= 8 and f[7] == "postscreen"]
+    if not services:
+        ctx.add("DNSBL.POSTSCREEN", "N/A", "Postscreen не найден в master.cf")
+        return
+    keys = ("postscreen_dnsbl_sites", "postscreen_dnsbl_threshold", "postscreen_dnsbl_action", "postscreen_dnsbl_allowlist_threshold")
+    overrides = ctx.run(["postconf", "-P"])
+    for service in services[:80]:
+        config = {key: ctx.postconf.get(key) for key in keys}
+        for line in overrides.stdout.splitlines() if overrides.ok else []:
+            match = re.fullmatch(re.escape(service) + r"/(postscreen_dnsbl_(?:sites|threshold|action|allowlist_threshold))\s*=\s*(.*)", line)
+            if match:
+                config[match[1]] = match[2]
+        sites, threshold, action, allowlist = (config[key] for key in keys)
+        complete = overrides.ok and all(value is not None for value in config.values())
+        if not complete or not re.fullmatch(r"[1-9][0-9]{0,5}", threshold or "") or not re.fullmatch(r"-?[0-9]{1,6}", allowlist or "") or action not in {"ignore", "enforce", "drop"}:
+            ctx.add("DNSBL.POSTSCREEN", "UNKNOWN", service + ": параметры postscreen DNSBL не разобраны полностью")
+            continue
+        tokens = _chain_tokens(sites)
+        if tokens is None or len(tokens) > 80:
+            ctx.add("DNSBL.POSTSCREEN", "UNKNOWN", service + ": синтаксис postscreen_dnsbl_sites не разобран")
+            continue
+        risk, unknown, positive_bound, relevant = [], False, 0, 0
+        for site in tokens:
+            spec, star, weight_text = site.partition("*")
+            if star and not re.fullmatch(r"-?[0-9]{1,6}", weight_text):
+                unknown = True
+                continue
+            weight = int(weight_text) if star else 1
+            zone, equals, pattern = spec.partition("=")
+            zone = zone.lower().rstrip(".")
+            if not _spamhaus_zone(zone):
+                continue
+            relevant += 1
+            hits = [rbl_filter_matches(pattern, code) if equals else True for code in _zone_error_codes(zone)]
+            if None in hits:
+                unknown = True
+            elif any(hits) and weight:
+                risk.append({"zone": clean(zone), "weight": weight, "filter": clean(pattern)})
+                positive_bound += max(0, weight)
+        allowlist_risk = int(allowlist) < 0 and any(site["weight"] < 0 for site in risk)
+        status = "UNKNOWN" if unknown else "WARN" if risk and (action != "ignore" or allowlist_risk) else "OK" if relevant else "N/A"
+        ctx.add("DNSBL.POSTSCREEN", status, service + ": " + (
+            "часть DNSBL-конфигурации не разобрана" if unknown else
+            "ошибки Spamhaus влияют на score" if risk else "фильтры исключают ошибки Spamhaus" if relevant else "Spamhaus не используется"),
+            [{"source": "postconf / postconf -P / postconf -M", "text": clean(service + ": sites=" + sites + "; threshold=" + threshold + "; action=" + action)}],
+            "Вес зоны учитывается один раз. Положительный вес ошибки может привести к ложному отказу, отрицательный — к обходу DNSBL. При action=ignore отказ не применяется. Другие listing/allowlist и порядок тестов требуют отдельного анализа.",
+            context=service, action=action, threshold=int(threshold), allowlist_threshold=int(allowlist), error_weight_sites=risk,
+            maximum_positive_error_score=positive_bound, errors_alone_may_reach_threshold=positive_bound >= int(threshold),
+            score_is_upper_bound=True, complete=not unknown)
 
 
 def parse_dns(result, record_type):
@@ -795,12 +887,21 @@ _DNSBL_NEXT_STEPS = {
 }
 
 
-def dnsbl_state(state, answers, kind):
+def dnsbl_state(state, answers, kind, access="public"):
     if state == "NXDOMAIN":
         return "OK", "not_listed"
     if state != "NOERROR":
         return "UNKNOWN", "dns_" + state.lower()
     codes = {a.strip() for a in answers}
+    if access == "dqs":
+        errors = {code for code in codes if code.startswith("127.255.255.") or kind == "domain" and code == _DBL_IP_QUERY}
+        if errors:
+            return "UNKNOWN", "dqs_error_response"
+        try:
+            listed = bool(codes) and all(ipaddress.ip_address(code) in ipaddress.ip_network("127.0.0.0/16") for code in codes)
+        except ValueError:
+            listed = False
+        return ("WARN", "listed") if listed else ("UNKNOWN", "service_or_unrecognized_response")
     if codes and codes <= _DNSBL_LISTED[kind]:
         return "WARN", "listed"
     errors = dict(_DNSBL_ERRORS, **({_DBL_IP_QUERY: "ip_query_on_domain_list"} if kind == "domain" else {}))

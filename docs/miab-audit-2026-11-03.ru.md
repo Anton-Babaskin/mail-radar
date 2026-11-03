@@ -65,7 +65,7 @@ deferred/hold видны рядом с очередью, а не только в
 
 ## Повторная проверка и оставшиеся границы
 
-Новые tests используют только fake runner и обезличенные сообщения. PTY tests
+Основные tests используют fake runner и обезличенные сообщения. PTY tests
 исполняют настоящий launcher, но включают --offline; ни почтовые службы, ни
 реальные DNSBL/банки не запускаются. Результаты полного matrix run записаны
 в `docs/validation.md`. Пустой/обрезанный отчёт не выдаётся за успешную доставку.
@@ -76,9 +76,52 @@ workflow, backup success без artifact и route persistence остаются �
 границами. Обновлённый код ещё не проверен прямым запуском на сервере владельца.
 Не объявляется, что синтетическая MIAB-фикстура заменяет такую проверку.
 
+## Дополнение по рекомендациям из PR #5/#6
+
+Повторно проверены named public-mirror errors 127.255.255.252/254/255,
+DBL IP-query error 127.0.1.255, WARN на ошибки operational controls,
+Queue ID grammar, quoted addresses, rightmost NOQUEUE tail, syslog instance
+и ISO offsets на Python 3.9/3.10. Регрессии остаются в общем наборе.
+
+Дополнительно исправлены оставшиеся пробелы:
+
+* `--domain` отклоняет IPv4/IPv6 literals до запуска проб и предлагает `--ip`.
+* Reply filters проверяются в HELO/DATA/end-of-data chains и master overrides.
+  DQS static filters исключают весь error /24; pure classifier отдельно
+  учитывает documented positive /16 и DBL IP-query exception. Runtime DQS
+  queries/ключи не добавлены; права конкретной подписки не проверяются.
+* `DNSBL.POSTSCREEN` читает master binding, sites, filter, weights, threshold,
+  action и allowlist threshold. Вес применяется один раз на pattern, а не
+  на каждый A record; положительная error score — верхняя оценка. Отрицательный
+  вес может обходить тесты даже при action=ignore, если allowlisting включён.
+  Неизвестный синтаксис/недоступные параметры дают UNKNOWN. Пределы: 80 sites
+  на service, 80 distinct SMTP rules и 80 мест использования на правило.
+* `DNSBL.INDIRECT_COVERAGE` явно даёт UNKNOWN для косвенных restriction classes
+  и действий access maps. Их условные результаты не моделируются.
+* NOQUEUE filter/hold/discard — запрос policy action без Queue ID/доказательства
+  приёма. Cleanup header warning хранит метаданные без текста заголовка.
+  Standalone `host ... said:` хранит ответ без выдуманного recipient/outcome.
+* Ruff E9/F добавлен в CI; удалены шесть неиспользуемых импортов.
+  Исторические SHA в audit/validation исправлены с сохранением фактического
+  head старого Actions run и объяснением attribution-only mapping.
+
+`test_review_followup.py` проверяет эти контракты; `test_dig_integration.py`
+исполняет настоящий dnsutils через loopback UDP DNS fixture (в том числе полный
+doctor/network workflow, controls, NXDOMAIN/NODATA/SERVFAIL и mixed A replies).
+Остальные host commands в этом тесте подменены. Контейнеры работают с
+`--network none`; запросов к публичным resolvers/Spamhaus не было. Приведённые
+в стороннем сообщении ответы 8.8.8.8/1.1.1.1/9.9.9.9 не выдаются за наши замеры.
+Реальные обезличенные mail.log/journal samples от владельца пока не получены;
+предоставлен только transcript диагностики. Production grammar основана на
+upstream sources и synthetic fixtures, что остаётся границей проверки.
+
 ## Первичные источники
 
 * [Dovecot2.3.16 LMTP source](https://github.com/dovecot/core/blob/2.3.16/src/lmtp/lmtp-local.c): session_id + Saved.
 * [Dovecot2.3.16 fetch source](https://github.com/dovecot/core/blob/2.3.16/src/doveadm/doveadm-mail-fetch.c): selected headers, newline-joined repeated headers, received/saved epochs.
 * [Postgrey upstream source](https://github.com/schweikert/postgrey/blob/master/postgrey): defaults and hostname whitelist matching. Runtime path confidence is checked against the installed script, not inferred from this URL alone.
 * [Spamhaus DNSBL usage](https://www.spamhaus.org/faqs/dnsbl-usage/) and [Postfix access](https://www.postfix.org/access.5.html): reply/error semantics; previous versioned source references remain in reference-semantics.md.
+* [Spamhaus DQS format and return codes](https://docs.spamhaus.com/datasets/docs/source/70-access-methods/data-query-service/040-dqs-queries.html) and [DBL dataset](https://docs.spamhaus.com/datasets/docs/source/10-data-type-documentation/datasets/030-datasets.html): DQS ranges and DBL IP-query exception.
+* [Postfix postscreen parameters](https://www.postfix.org/postconf.5.html#postscreen_dnsbl_sites), [postscreen howto](https://www.postfix.org/POSTSCREEN_README.html): per-pattern weights, threshold/action, negative allowlisting.
+* [Postfix smtpd_check.c](https://github.com/vdukhovni/postfix/blob/master/postfix/src/smtpd/smtpd_check.c): log_whatsup structured policy tail; [smtp_proto.c](https://github.com/vdukhovni/postfix/blob/master/postfix/src/smtp/smtp_proto.c): remote replies are not recipient delivery records.
+* [Ruff configuration](https://docs.astral.sh/ruff/configuration/): pinned development linter with target Python 3.9 and selected semantic rules.

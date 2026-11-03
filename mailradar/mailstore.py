@@ -4,7 +4,7 @@ import math
 import os
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 

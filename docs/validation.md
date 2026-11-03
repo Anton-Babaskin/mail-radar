@@ -3,7 +3,8 @@
 This file records executed checks rather than treating configured CI as a
 successful run. Fixture tests do not validate a real mail server.
 The initial 4.0.0 checked implementation is
-`07d4d88578cc8c515a65efa91502615b6a762466` (code, tests, installer and CI).
+`d3775f7cf3acb85779d2d04b6463a8ec8bb197e0` (code, tests, installer and CI;
+current history after the owner-author attribution correction).
 The subsequent documentation commit does not change those tested files.
 
 ## Executed in the development environment
@@ -114,6 +115,13 @@ conclusions and test-count logs were verified. The subsequent validation-record
 update changes documentation only. These CI jobs use fixtures and fake commands;
 they do not establish live mail-server correctness.
 
+That is the historical head recorded by Actions, not a current-history SHA.
+The attribution-only rewrite replaced it with
+`ef63c49f7ad6e254f7ca3eeebc0d3b94b64c1fcd`; its Git tree is identical.
+The tested code commit formerly named `07d4d88` is now `d3775f7` (also the same
+tree). Historical Actions metadata is preserved here rather than relabeled as
+a run against a different SHA.
+
 ## Deliberately not claimed
 
 No test here establishes delivery to an external INBOX, validates production
@@ -166,3 +174,37 @@ GitHub Actions was also verified for PR #7 at
 completed successfully on both Python3.9 and3.10, with **158 tests per job**,
 Bash syntax and ShellCheck. A subsequent cleanup only removes a trailing blank
 line and records this result; no diagnostic behavior changes.
+
+## Remaining-review follow-up (2026-11-03)
+
+The expanded suite executed **169 tests without skips** on Ubuntu 22.04 /
+Python 3.10.12 (9.822 s) and on Python 3.9.25 (15.698 s). Both containers used
+`--network none`, a read-only checkout and private executable `/tmp` tmpfs.
+The Ubuntu development Dockerfile now installs dnsutils and Ruff 0.14.10;
+the Python 3.9 image was built from `python:3.9-slim-bookworm` with dnsutils.
+Final local checks after the bounded-static-rule refinement also passed:
+169 tests on Python 3.10 (9.223 s), 169 on Python 3.9 (13.572 s), Ruff, ShellCheck
+and Bash syntax for all three scripts. A subsequent review also ensures
+master.cf restriction-class declarations are reported as indirect coverage;
+final-head CI results are recorded separately below.
+
+Two cases run real `dig`, actual Runner subprocess handling and parse_dns
+against a stdlib UDP DNS fixture bound only to 127.0.0.1 at an ephemeral port.
+This includes the complete doctor/network analysis path and JSON CLI output,
+both DNSBL operational-control pairs, multiple A replies, NXDOMAIN, NODATA
+and SERVFAIL. All other host commands are stubbed. No public DNSBL/DQS query,
+real TLS service, mail daemon or remote resolver is involved. The Runner port
+option remains numeric (1..65535), read-only and subject to --network.
+CI explicitly installs dnsutils and executes `dig -v`, so these integration
+cases cannot silently disappear for lack of that binary in the configured jobs.
+
+Ruff 0.14.10 `check --no-cache mailradar tests` passed with E9/F selected for
+Python 3.9. Six unused imports were removed. Reproduce the Ubuntu checks with
+the Docker build/run commands above, using `ruff check --no-cache` in the
+read-only mount. The only pip requirement is development tooling.
+
+The additional `test_review_followup.py` cases cover domain/IP typing, DQS
+return-code semantics/privacy, malformed/oversized reply filters, HELO/DATA
+and master overrides, postscreen weights/threshold/action/allowlisting,
+indirect-coverage uncertainty, and the extra policy/header/remote-reply
+grammars without invented deliveries. Live MIAB validation remains unclaimed.

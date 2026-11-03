@@ -405,7 +405,7 @@ class ChecksTests(unittest.TestCase):
         self.assertEqual(zen["details"]["contexts"], ["global/smtpd_recipient_restrictions", "submission/inet/smtpd_recipient_restrictions"])
         self.assertEqual(items["dbl.spamhaus.org"]["details"]["error_codes_accepted"], ["127.0.1.255"])
 
-    def test_miab_reply_filters_pass_and_dqs_zone_is_not_judged(self):
+    def test_miab_reply_filters_pass_and_unfiltered_dqs_errors_are_flagged(self):
         responses = self.base_postfix(
             smtpd_sender_restrictions="reject_non_fqdn_sender, reject_rhsbl_sender dbl.spamhaus.org=127.0.1.[2..99]",
             smtpd_recipient_restrictions="permit_sasl_authenticated, reject_rbl_client zen.spamhaus.org=127.0.0.[2..11], "
@@ -413,7 +413,8 @@ class ChecksTests(unittest.TestCase):
         ctx = self.context(responses)
         checks.dnsbl_filter_checks(ctx, checks.postfix_checks(ctx))
         items = self.find(ctx, "DNSBL.POSTFIX_FILTER")
-        self.assertEqual([(f["details"]["zone"], f["status"]) for f in items], [("zen.spamhaus.org", "OK"), ("dbl.spamhaus.org", "OK")])
+        self.assertEqual({f["details"]["zone"]: f["status"] for f in items},
+                         {"zen.spamhaus.org": "OK", "dbl.spamhaus.org": "OK", "[DQS-key].zen.dq.spamhaus.net": "WARN"})
         self.assertNotIn("abcdefghijk123456789", json.dumps(ctx.findings))
 
     def test_postfix_filter_without_spamhaus_or_readable_chains(self):

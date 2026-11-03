@@ -16,7 +16,7 @@ def clean(value, limit=4000):
     value = "".join(c for c in value if c in "\n\t" or (ord(c) >= 32 and not 127 <= ord(c) <= 159 and c not in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"))
     value = re.sub(r"(?i)\b(password|passwd|secret_key|api[_-]?token|authorization)\s*[=:]\s*[^\s,;]+", r"\1=[REDACTED]", value)
     value = re.sub(r"(://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@", value)
-    value = re.sub(r"(?i)\b[a-z0-9_-]+\.(?=(?:zen|dbl|sbl|xbl|pbl|zrd|authbl)\.dq\.spamhaus\.net\b)","[DQS-key].",value)
+    value = re.sub(r"(?i)\b[a-z0-9_-]+\.(?=[a-z0-9_-]+\.dq\.spamhaus\.net\b)","[DQS-key].",value)
     return value[:limit] + ("…[truncated]" if len(value) > limit else "")
 
 

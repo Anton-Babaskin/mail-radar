@@ -209,13 +209,18 @@ PRs #5/#6.
 ## Development and evidence
 
 ```bash
+python3 -m pip install -r requirements-dev.txt
+ruff check mailradar tests
 python3 -m unittest discover -s tests -v
 for script in mail-radar miab-radar install.sh; do bash -n "$script"; done
 shellcheck mail-radar miab-radar install.sh
 ```
 
-Tests use synthetic fixtures and fake command results, not live mail servers or
-public DNSBLs. Linux CI covers Python 3.9 and 3.10 on Ubuntu 22.04. A Windows or
+Tests use synthetic fixtures and fake host commands. Two integration cases run
+the real `dig` against an ephemeral loopback DNS server; install `dnsutils` to
+run them locally (CI installs it and checks `dig -v`). No public DNSBL or live
+mail server is contacted. Ruff is a development dependency only.
+Linux CI covers Python 3.9 and 3.10 on Ubuntu 22.04. A Windows or
 Git Bash run alone does not establish Linux support. Actual validation results,
 including checks not run, belong in [validation.md](docs/validation.md).
 

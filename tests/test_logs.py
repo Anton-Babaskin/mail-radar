@@ -1,5 +1,5 @@
 import bz2
-from datetime import datetime, timezone
+from datetime import datetime
 import gzip
 import json
 import lzma
@@ -389,7 +389,7 @@ class LogAnalysisTests(unittest.TestCase):
         self.assertEqual(result["statistics"]["queues"], 0)
         self.assertEqual(result["statistics"]["daemon_warnings"], 1)
         self.assertIn("MAIL-DAEMON-ERROR", [f["id"] for f in result["findings"]])
-        self.assertEqual(result["completeness"]["unparsed_lines"], 1)  # NOQUEUE filter is not modeled
+        self.assertEqual(result["completeness"]["unparsed_lines"], 0)
 
     def test_client_port_logging_and_sasl_sender(self):
         result = self.analyze(

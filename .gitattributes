@@ -7,4 +7,6 @@ miab-radar text eol=lf
 *.yml text eol=lf
 *.log text eol=lf
 *.txt text eol=lf
+*.toml text eol=lf
+Dockerfile* text eol=lf
 .gitignore text eol=lf

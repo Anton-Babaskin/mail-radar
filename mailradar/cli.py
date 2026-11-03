@@ -115,6 +115,13 @@ def validate(p, args):
             p.error("Некорректный адрес: --"+("from" if field == "sender" else field))
     for field in ("domain", "client_name", "dkim_selector"):
         value = getattr(args, field)
+        if value and field == "domain":
+            try:
+                ipaddress.ip_address(value.rstrip("."))
+            except ValueError:
+                pass
+            else:
+                p.error("--domain принимает доменное имя; для IP используйте --ip")
         if value and (len(value) > 253 or not re.fullmatch(r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?", value)):
             p.error("Некорректное имя: --"+field.replace("_", "-"))
     for field in ("ip", "client_ip", "peer"):
