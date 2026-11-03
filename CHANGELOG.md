@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.0.2 — unreleased
+
+* Explain how to update an existing checkout, preserve local changes and
+  reinstall the separate global command. Include the running version in help.
+* Remove bytecode only for installed module names after updates and reject
+  symlinked cache paths, so equal-size source changes with colliding timestamps
+  cannot silently load the previous compiled version.
+* Aggregate delivery conclusions into summary severity and exit status, retain
+  all conclusions in JSON and prioritize later failures in compact output.
+  Display standalone Dovecot Saved without a fictitious queue or delivery attempt.
+* Preserve source/check incompleteness for bounded stdin, journal and watch;
+  restore the caller's signal handlers after watch/session operations.
+* Keep expiry/notification/removal in the same queue lifecycle; preserve exact
+  Queue ID and Message-ID case while retaining domain-filter semantics.
+* Refine local policy-listener address-family matching, actual Postfix service
+  instance state and literal Postgrey discovery from SysV startup scripts.
+* Bound deep-scan directory enumeration incrementally; use nonblocking POSIX
+  subprocess pipes so a held pipe does not leave reader threads past timeout.
+* Add synthetic runtime and staged-upgrade regressions and an anonymized audit
+  separating the supplied 4.0.0 transcript from findings on the newer baseline.
+
 ## 4.0.1 — unreleased
 
 * Fix production MIAB submission, Dovecot LMTP session/Sieve formats and

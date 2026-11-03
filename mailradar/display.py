@@ -41,15 +41,20 @@ def human(report, details=False):
     if report.get("filters"):
         names = {"from": "отправитель", "to": "получатель", "domain": "домен", "ip": "IP", "trace": "поиск", "message_id": "Message-ID"}
         print("Фильтры: " + "; ".join("%s: %s" % (names.get(k,k),v) for k,v in report["filters"].items()))
-    for answer in report.get("conclusions", [])[:8]:
+    answers = report.get("conclusions", [])
+    priority = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "OK": 3, "N/A": 4}
+    for answer in sorted(answers, key=lambda item: priority.get(item["status"], 5))[:8]:
         print("[%s] %s" % (answer["status"], answer["title"]))
         for item in answer.get("evidence", [])[:1]:
             print("  " + _evidence(item))
+    if len(answers) > 8:
+        print("Ещё выводов: %d; доступны в --json/--report." % (len(answers) - 8))
     stats = report.get("statistics", {})
     if stats:
         print("Поток: очередей %d; попыток доставки %d; успешных передач %d; deferred %d; bounced %d." % tuple(stats.get(k,0) for k in ("queues","delivery_attempts","recipient_delivery_events","deferred","bounced")))
         outcomes = stats.get("outcomes", {})
-        print("Этапы: следующий SMTP %d; внутренний SMTP %d; локальный транспорт %d; Saved %d. Отказов до очереди: %d." % (outcomes.get("next_smtp_accepted",0),outcomes.get("internal_smtp_accepted",0),outcomes.get("local_transport_accepted",0),outcomes.get("saved",0),stats.get("rejected_before_queue",0)))
+        print("Этапы: следующий SMTP %d; внутренний SMTP %d; локальный транспорт %d. Отказов до очереди: %d." % (outcomes.get("next_smtp_accepted",0),outcomes.get("internal_smtp_accepted",0),outcomes.get("local_transport_accepted",0),stats.get("rejected_before_queue",0)))
+        print("Saved: транспорт %d; журнал Dovecot %d (события могут относиться к одному письму)." % (outcomes.get("saved",0),stats.get("saved_log_events",0)))
     findings = report.get("findings", [])
     problems = [f for f in findings if f["status"] in ("FAIL","WARN")]
     unknown = [f for f in findings if f["status"] == "UNKNOWN"]

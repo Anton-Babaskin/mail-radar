@@ -537,7 +537,9 @@ def _event_public(event):
     return _clean_tree({k: v for k, v in event.items() if not k.startswith("_")})
 
 
-def _literal_match(values, requested):
+def _literal_match(values, requested, case_sensitive=False):
+    if case_sensitive:
+        return any(str(v) == str(requested) for v in values if v is not None)
     return any(str(v).casefold() == str(requested).casefold() for v in values if v is not None)
 
 
@@ -549,7 +551,7 @@ def _matches(events, filters):
     for name, field in (("from", "sender"), ("to", "recipient"), ("ip", "client_ip"), ("message_id", "message_id")):
         requested = filters.get(name)
         values = fields[field] + (fields["orig_to"] if name == "to" else [])
-        if requested and not _literal_match(values, requested):
+        if requested and not _literal_match(values, requested, case_sensitive=name == "message_id"):
             return False
     domain = filters.get("domain")
     if domain:
@@ -559,7 +561,7 @@ def _matches(events, filters):
     trace = filters.get("trace")
     if trace:
         if trace.startswith("<") and trace.endswith(">"):
-            if not _literal_match(fields["message_id"], trace):
+            if not _literal_match(fields["message_id"], trace, case_sensitive=True):
                 return False
         elif "@" in trace:
             if not _literal_match(fields["sender"] + fields["recipient"] + fields["orig_to"], trace):
@@ -568,7 +570,7 @@ def _matches(events, filters):
             if not _literal_match(fields["client_ip"], str(ipaddress.ip_address(trace))):
                 return False
         elif re.fullmatch(r"[A-Za-z0-9]{5,100}", trace):
-            if not _literal_match(fields["queue_id"], trace):
+            if not _literal_match(fields["queue_id"], trace, case_sensitive=True):
                 return False
         else:
             domains = [str(v).rsplit("@", 1)[-1].casefold() for v in fields["sender"] + fields["recipient"] if v and "@" in str(v)]
@@ -586,7 +588,14 @@ def _queue_traces(events, since, until, filters):
         trace = current.get(key)
         # A new cleanup message-id after a closed queue always starts a lifecycle.
         changed_mid = bool(trace and event["kind"] == "message_id" and trace["message_ids"] and event["message_id"] not in trace["message_ids"])
-        if trace is None or trace["_closed"] or changed_mid:
+        terminal = trace["_closed"] if trace else False
+        # Expiry still has a notification/removal tail in the same lifecycle.
+        # Repeated removal/notification records after removal are not new mail.
+        # Any other event after expiry/removal starts a separate lifecycle:
+        # retained logs may contain a reused ID's delivery but omit its ingress.
+        # That later delivery must not revive the already expired message.
+        restarted = terminal in ("removed", "expired") and event["kind"] not in ("removed", "notification")
+        if trace is None or restarted or changed_mid:
             generations[key] += 1
             trace = {"id": "%s/%s/%s#%d" % (*key, generations[key]),
                      "host": key[0], "instance": key[1], "queue_id": key[2],
@@ -599,7 +608,7 @@ def _queue_traces(events, since, until, filters):
             if field in event and event[field] not in trace[target]:
                 trace[target].append(event[field])
         if event["kind"] in ("removed", "expired"):
-            trace["_closed"] = True
+            trace["_closed"] = event["kind"]
     # Explicit localhost reinjection connects lifecycles; never join by Message-ID.
     by_destination = defaultdict(list)
     for trace in queues:

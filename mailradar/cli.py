@@ -22,7 +22,7 @@ from .timeutil import local_zone, timestamp
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="mail-radar", description="MailRadar: локальная диагностика доставки. Сетевые пробы включаются только --network.")
+    p = argparse.ArgumentParser(prog="mail-radar", description="MailRadar " + __version__ + ": локальная диагностика доставки. Сетевые пробы включаются только --network.")
     p.add_argument("period", nargs="?", type=float, help="старый числовой период в часах (по умолчанию 24)")
     modes = p.add_mutually_exclusive_group()
     for flag, desc in (("doctor", "общий обзор"), ("diagnose", "разобрать доставку"), ("flow", "статистика потока"), ("greylist", "greylisting и повторы"), ("whitelist", "карты Postfix и whitelist Postgrey"), ("watch", "наблюдение за новыми событиями"), ("mailboxes", "выбранный локальный ящик"), ("post-update", "состояние после обновления")):
@@ -63,7 +63,7 @@ def parser():
 
 def menu(args):
     choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "diagnose"), ("Исходящее не дошло", "diagnose"), ("Задержка письма", "diagnose"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь и SMTP-отказы", "doctor"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS/TLS/resolver/relay", "doctor"), ("Место/квота/аккаунт", "mailboxes"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch"), ("Поиск по Message-ID / Queue ID / домену", "trace"), ("Заголовки и текущая папка письма", "headers")]
-    print("\nMailRadar — выберите задачу:")
+    print("\nMailRadar " + __version__ + " — выберите задачу:")
     for number, (label, _) in enumerate(choices, 1):
         print("%2d. %s" % (number, label))
     print(" 0. Выход")
@@ -186,7 +186,7 @@ def conclusions(report, recipient=None):
         "unknown": ("UNKNOWN", "исход не установлен по доступным данным"),
     }
     answers = []
-    for trace in report.get("traces", [])[:20]:
+    for trace in report.get("traces", []):
         final = {}
         for event in trace["events"]:
             if not event.get("in_window", True):
@@ -207,6 +207,22 @@ def conclusions(report, recipient=None):
             answers.append(dict(trace_id=trace["id"], status=status, outcome=outcome,
                                 title="%s → %s: %s" % (trace["queue_id"], address, text), evidence=[evidence] if evidence else [],
                                 next_step="Сверьте точный SMTP/DSN response и следующую попытку." if outcome in ("deferred", "bounced") else ""))
+    saved = list(report.get("evidence", []))
+    saved.extend(e for f in report.get("findings", []) if f["id"] == "MAIL-SAVED-EVENT" for e in f.get("evidence", []))
+    seen = set()
+    for event in saved:
+        if event.get("kind") != "saved" or not event.get("in_window", True):
+            continue
+        if recipient and recipient.casefold() != str(event.get("recipient", "")).casefold():
+            continue
+        identity = (event.get("source"), event.get("line"), event.get("time"))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        answers.append(dict(status="OK", outcome="saved", message_id=event.get("message_id"),
+                            title="Dovecot → %s: подтверждено сохранение; текущая папка требует Dovecot-поиска" % event.get("recipient", "получатель неизвестен"),
+                            evidence=[{k: event[k] for k in ("source", "line", "time", "text", "mailbox") if k in event}],
+                            next_step="Отдельная запись без Queue ID не связывается автоматически с очередью по одному Message-ID."))
     if not answers:
         relevant = [f for f in report["findings"] if f["id"] in ("MAIL-PREQUEUE-REJECT", "GREYLIST-RETRY-PASS", "GREYLIST-UNRESOLVED")]
         for item in relevant[:5]:
@@ -221,6 +237,7 @@ def analyze(args, runner, since, until, paths):
     filters = {k: v for k, v in {"from": args.sender, "to": args.to, "domain": args.domain, "ip": args.ip, "trace": args.trace, "message_id": args.headers}.items() if v}
     logs = analyze_logs(paths, since, until, timezone=args.timezone, year=args.year, filters=filters, max_bytes=args.max_bytes, max_lines=args.max_lines, recent=getattr(args,"recent_logs",False))
     logs["completeness"]["log_sources_complete"] = logs["completeness"]["complete"]
+    logs["completeness"]["checks_complete"] = True
     report = dict(schema_version="1.0", tool=dict(name="MailRadar", version=__version__), mode=args.mode, window=dict(since=since.isoformat(), until=until.isoformat(), timezone=args.timezone, year=args.year), filters=filters, **logs)
     for item in report["findings"]:
         item.setdefault("window", report["window"])
@@ -243,10 +260,10 @@ def analyze(args, runner, since, until, paths):
     report["commands"] = runner.history
     if args.mode in ("diagnose", "trace", "headers", "mailboxes", "watch", "greylist"):
         report["conclusions"] = conclusions(report, args.to or args.user)
-    if any(f["status"] == "UNKNOWN" for f in report["findings"]):
+    if any(f["status"] == "UNKNOWN" for f in report["findings"] + report.get("conclusions", [])):
         report["completeness"]["checks_complete"] = False
         report["completeness"]["complete"] = False
-        report["completeness"].setdefault("limitations", []).append("One or more checks lack evidence; see UNKNOWN findings.")
+        report["completeness"].setdefault("limitations", []).append("One or more checks or delivery conclusions lack evidence; see UNKNOWN results.")
     report = finish_report(report)
     return report
 
@@ -258,13 +275,16 @@ def watch(args, runner, since, until, paths, interrupted):
     handles, snapshots, buffers, observed = {}, {}, {}, {}
     total, last_update = 0, 0
     limitations = []
+    capture_truncated = False
     def emit(kind, **values):
         payload = dict(type=kind, time=datetime.now(timezone.utc).isoformat(), **values)
         if args.json:
             print(json.dumps(payload, ensure_ascii=False), flush=True)
         else:
             print(clean(kind+": "+json.dumps(values, ensure_ascii=False)), flush=True)
-    def gap(reason):
+    def gap(reason, truncated=False):
+        nonlocal capture_truncated
+        capture_truncated = capture_truncated or truncated
         if reason not in limitations and len(limitations) < 100:
             limitations.append(reason)
             emit("source_gap", reason=clean(reason))
@@ -322,7 +342,7 @@ def watch(args, runner, since, until, paths, interrupted):
                         else:
                             buffers[name] = pending
                         if len(buffers[name]) > 65536:
-                            gap("Watch line length limit: partial line discarded")
+                            gap("Watch line length limit: partial line discarded", truncated=True)
                             buffers[name] = b""
                         if rotated and not data:
                             if buffers[name]:
@@ -332,7 +352,7 @@ def watch(args, runner, since, until, paths, interrupted):
                             attach(name)
                             gap("Observed rotation: possible race/gap")
                         if total >= args.max_bytes:
-                            gap("Watch byte limit reached")
+                            gap("Watch byte limit reached", truncated=True)
                             end = time.monotonic()
                     except OSError:
                         gap("Watch source missing/unreadable during observation")
@@ -356,8 +376,11 @@ def watch(args, runner, since, until, paths, interrupted):
         for source in report["sources"]:
             source.update(kind="watch", bytes_observed=observed.get(source["path"], 0))
         report["completeness"]["limitations"] = report["completeness"].get("limitations", []) + limitations + ["Live watch is not a lossless log collector; retained-log trace is recommended."]
+        report["completeness"]["truncated"] = report["completeness"].get("truncated", False) or capture_truncated
         if interrupted[0] or limitations:
             report["completeness"]["complete"] = False
+            report["completeness"]["log_sources_complete"] = False
+            report["completeness"]["checks_complete"] = False
             report["findings"].append(finding("watch.incomplete", "UNKNOWN", "Наблюдение прервано или содержит пробелы", evidence=limitations))
         report["watch"] = dict(elapsed_seconds=round(time.monotonic()-started, 2), interrupted=bool(interrupted[0]), bytes_observed=total, reason="signal" if interrupted[0] else "duration_or_limit")
         report = finish_report(report)
@@ -384,7 +407,8 @@ def _run_once(args, p):
         runner.close()
         if args.mode != "watch":
             raise KeyboardInterrupt
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    for sig in previous_handlers:
         signal.signal(sig, stop)
     try:
         if args.report and os.path.lexists(args.report):
@@ -421,8 +445,12 @@ def _run_once(args, p):
             else:
                 report = source_labels(analyze(args, runner, since, until, paths), labels)
                 if stdin_truncated or journal_result is not None and not journal_result.ok:
-                    report["findings"].append(finding("sources.incomplete", "UNKNOWN", "stdin/journal прочитан не полностью", evidence=[dict(stdin_truncated=stdin_truncated, journal_error=journal_result.stderr if journal_result else "")]))
+                    report["findings"].append(finding("sources.incomplete", "UNKNOWN", "stdin/journal прочитан не полностью", evidence=[dict(stdin_truncated=stdin_truncated, journal_error=journal_result.stderr if journal_result else "", journal_truncated=bool(journal_result and journal_result.truncated), journal_timed_out=bool(journal_result and journal_result.timed_out), journal_missing=bool(journal_result and journal_result.missing))]))
                     report["completeness"]["complete"] = False
+                    report["completeness"]["log_sources_complete"] = False
+                    report["completeness"]["checks_complete"] = False
+                    if stdin_truncated or journal_result is not None and journal_result.truncated:
+                        report["completeness"]["truncated"] = True
                     report = finish_report(report)
                 if args.redact:
                     report = redact_report(report)
@@ -450,7 +478,11 @@ def _run_once(args, p):
         print(json.dumps(message, ensure_ascii=False) if args.json else "Ошибка: "+clean(error), file=sys.stderr)
         return 3
     finally:
-        runner.close()
+        try:
+            runner.close()
+        finally:
+            for sig, handler in previous_handlers.items():
+                signal.signal(sig, handler)
 
 
 def main(argv=None):

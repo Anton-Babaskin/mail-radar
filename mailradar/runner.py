@@ -1,6 +1,7 @@
 """The action-aware boundary for all external diagnostic commands."""
 import os
 import re
+import selectors
 import signal
 import subprocess
 import threading
@@ -49,13 +50,14 @@ def permitted(argv):
             return len(args) == 2 and bool(re.fullmatch(r"[\w@.-]+", args[1]))
         if args and args[0] == "show":
             return len(args) >= 3 and bool(re.fullmatch(r"[\w@.-]+", args[1])) and all(a in ("--value", "--no-pager", "--property=LoadState,ActiveState,SubState", "--property=ExecStart", "--property=MainPID", "--property=LoadState", "--property=ActiveState", "--property=SubState") for a in args[2:])
-        return args in (["list-unit-files", "--type=service", "--no-legend", "--no-pager"], ["list-unit-files", "--no-legend", "--no-pager"])
+        return args in (["list-unit-files", "--type=service", "--no-legend", "--no-pager"], ["list-unit-files", "--no-legend", "--no-pager"],
+                        ["list-units", "--type=service", "--all", "--no-legend", "--no-pager", "--plain"])
     if cmd == "df":
         return len(args) <= 10 and all(a in ("-P", "-Pi", "-h", "-i", "--output=pcent,target", "--output=ipcent,target", "/", "/home", "/home/user-data") for a in args)
     if cmd == "doveconf":
         return len(args) == 2 and args[0] == "-h" and args[1] in ("protocols", "ssl")
     if cmd == "ss":
-        return args in (["-tlnp"], ["-ltn"], ["-ltnp"], ["-tln"])
+        return args in (["-tlnp"], ["-ltn"], ["-ltnp"], ["-tln"], ["-lxnp"])
     if cmd == "sshd":
         return args == ["-T"]
     if cmd == "fail2ban-client":
@@ -165,6 +167,8 @@ class Runner:
         except OSError as error:
             return Result(126, stderr=str(error))
         self.processes.add(process)
+        if os.name == "posix":
+            return self._read_posix(process, timeout)
         chunks = [bytearray(), bytearray()]
         limited = threading.Event()
         def read(stream, target):
@@ -205,3 +209,69 @@ class Runner:
             raise
         finally:
             self.processes.discard(process)
+
+    def _read_posix(self, process, timeout):
+        """Bound both pipes without reader threads or per-pipe join delays.
+
+        A descendant retaining a pipe cannot make our read block after the
+        deadline. SIGKILL applies to the command's original process group.
+        """
+        chunks = [bytearray(), bytearray()]
+        limited, timed_out = False, False
+        selector = selectors.DefaultSelector()
+        deadline = time.monotonic() + timeout
+        try:
+            for index, stream in enumerate((process.stdout, process.stderr)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, index)
+            while selector.get_map() or process.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                if not selector.get_map():
+                    try:
+                        process.wait(timeout=remaining)
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                    break
+                for key, _ in selector.select(timeout=min(.1, remaining)):
+                    try:
+                        data = os.read(key.fd, 4096)
+                    except BlockingIOError:
+                        continue
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    target = chunks[key.data]
+                    capacity = max(0, self.max_output - len(target))
+                    target.extend(data[:capacity])
+                    if len(data) > capacity:
+                        limited = True
+                        break
+                if limited:
+                    break
+            if timed_out or limited:
+                self.stop(process)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                self.stop(process)
+            return Result(process.returncode if process.returncode is not None else 124,
+                          *(bytes(chunk).decode("utf-8", "replace") for chunk in chunks),
+                          truncated=limited, timed_out=timed_out)
+        except BaseException:
+            self.stop(process)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+            if process.poll() is not None:
+                self.processes.discard(process)

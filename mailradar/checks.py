@@ -220,10 +220,17 @@ def service_checks(ctx):
         unused_daemon = complete and not active and not required and ("inactive" in state.stdout.splitlines() or "ActiveState=inactive" in state.stdout.splitlines()) and (enable_states.get(name) in {"disabled","masked","static"} or name == "spamassassin" and ctx.miab and ctx.unit_states.get("spampd") is True)
         if unused_daemon:
             status = "N/A"
+        runtime = None
+        if name == "postfix" and complete and active and ("postfix@" in installed or _unit_has_substate(state, "exited")):
+            runtime = _postfix_runtime_instances(ctx)
+            status = runtime["status"]
+            ctx.unit_states[name] = status == "OK" if status != "UNKNOWN" else None
         ctx.add("SERVICE." + name.upper().replace("-", "_"), status,
-                name + (": отдельный daemon не используется (MIAB фильтрует через spampd)" if unused_daemon and name == "spamassassin" and ctx.unit_states.get("spampd") is True else ": отключённый необязательный daemon" if unused_daemon else ": состояние не подтверждено" if not complete else ": active" if active else ": отсутствует" if missing else ": не active"),
+                name + (": " + runtime["title"] if runtime else ": отдельный daemon не используется (MIAB фильтрует через spampd)" if unused_daemon and name == "spamassassin" and ctx.unit_states.get("spampd") is True else ": отключённый необязательный daemon" if unused_daemon else ": состояние не подтверждено" if not complete else ": active" if active else ": отсутствует" if missing else ": не active"),
                 [command_evidence(cmd, state)],
-                "Проверьте журнал и конфигурацию службы; active не доказывает корректную обработку почты.")
+                "Проверьте журнал и конфигурацию службы; active не доказывает корректную обработку почты.",
+                runtime_instances=runtime["units"] if runtime else None,
+                instance_inventory_complete=runtime["complete"] if runtime else None)
 
 
 def _unit_state(result):
@@ -237,6 +244,64 @@ def _unit_state(result):
     activestates = {"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance", "refreshing"}
     complete = result.ok and len(fields) == 3 and bool(loadstates.intersection(fields)) and bool(activestates.intersection(fields)) and all(fields)
     return complete, complete and "active" in fields, complete and "not-found" in fields
+
+
+def _unit_has_substate(result, substate):
+    return substate in result.stdout.splitlines() or "SubState=" + substate in result.stdout.splitlines()
+
+
+def _postfix_runtime_instances(ctx):
+    """Debian/Jammy postfix.service is an umbrella oneshot, not the master.
+
+    Inspect the generated default and loaded instance units. Missing inventory
+    cannot be replaced with the umbrella's active(exited) state.
+    """
+    argv = ["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager", "--plain"]
+    inventory = ctx.run(argv)
+    units, unparsed = [], False
+    for line in inventory.stdout.splitlines() if inventory.ok else []:
+        fields = line.split()
+        if not fields or not fields[0].startswith("postfix@"):
+            continue
+        name = fields[0]
+        if re.fullmatch(r"postfix@[A-Za-z0-9_.@-]+\.service", name) and len(fields) >= 4:
+            if name not in units:
+                units.append(name)
+        else:
+            unparsed = True
+    complete = bool(inventory.ok and not inventory.stderr.strip() and not unparsed and units and len(units) <= 20)
+    if "postfix@-.service" not in units:
+        # Jammy's generator always creates this default unit. A failed lookup
+        # is UNKNOWN, never an assertion that the umbrella has a live master.
+        units.insert(0, "postfix@-.service")
+        complete = False
+    selected = units[:20]
+    statuses = []
+    for name in selected:
+        cmd = ["systemctl", "show", name, "--property=LoadState,ActiveState,SubState", "--value"]
+        state = ctx.run(cmd)
+        known, active, missing = _unit_state(state)
+        inactive = "inactive" in state.stdout.splitlines() or "ActiveState=inactive" in state.stdout.splitlines()
+        # An inactive secondary unit may have been intentionally stopped. A
+        # loaded unit alone does not establish that it is required to run.
+        failed = known and not missing and (_unit_has_substate(state, "failed") or
+                 name == "postfix@-.service" and inactive and _unit_has_substate(state, "dead"))
+        status = "UNKNOWN" if not known or missing else "OK" if active and _unit_has_substate(state, "running") else "FAIL" if failed else "UNKNOWN"
+        statuses.append(status)
+        ctx.unit_states[name] = status == "OK" if status != "UNKNOWN" else None
+        ctx.add("SERVICE.POSTFIX_INSTANCE", status,
+                name + (": daemon active/running" if status == "OK" else ": daemon не запущен" if status == "FAIL" else ": daemon state не подтверждён"),
+                [command_evidence(cmd, state)],
+                "Это фактический instance unit. Общий postfix.service active(exited) сам по себе не подтверждает работу master.",
+                unit=name, daemon_running_confirmed=status == "OK")
+    if not complete:
+        ctx.add("SERVICE.POSTFIX_INVENTORY", "UNKNOWN", "Inventory actual Postfix instances неполный",
+                [command_evidence(argv, inventory, "selected=" + ",".join(selected))],
+                "Проверьте generated postfix@-.service и configured instances; службы не запускаются.",
+                omitted_instances=max(0, len(units) - 20))
+    status = "FAIL" if "FAIL" in statuses else "UNKNOWN" if not complete or "UNKNOWN" in statuses else "OK"
+    return {"status": status, "complete": complete, "units": selected,
+            "title": "один из actual instance daemons не работает" if status == "FAIL" else "actual instance daemons active/running" if status == "OK" else "umbrella active(exited) недостаточно; actual daemon state неизвестен"}
 
 
 def queue_checks(ctx):
@@ -581,7 +646,8 @@ def postgrey_whitelist_checks(ctx, name, address):
     if not paths and not configdir:
         executable = re.search(r"(?:path=|^)(/[^\s;{}]+/postgrey)(?:\s|;|$)",result.stdout.strip())
         if executable:
-            script, _ = ctx.read(executable[1],256*1024)
+            script_path = _postgrey_program_path(ctx, executable[1])
+            script, _ = ctx.read(script_path,256*1024) if script_path else (None, "unconfirmed executable metadata")
             directory = re.search(r"\bmy\s+\$CONFIG_DIR\s*=\s*['\"](/[^'\"$`]+)['\"]\s*;",script or "")
             definition = re.search(r"whitelist_clients_files\s*=>\s*\$opt\{'whitelist-clients'\}\s*\|\|\s*\[([^\]]+)\]",script or "",re.S)
             if directory and definition and "$" not in options:
@@ -589,7 +655,7 @@ def postgrey_whitelist_checks(ctx, name, address):
                 if len(suffixes)==2:
                     paths=[directory[1]+"/"+(prefix or "")+"whitelist_clients"+(suffix or "") for prefix,suffix in suffixes]
                     defaults_confirmed=True
-                    defaults_source=executable[1]
+                    defaults_source=script_path
     inferred = not paths
     if not paths:
         directories = [configdir[1]] if configdir and configdir[1].startswith("/") else ["/etc/postgrey", "/etc/postfix"]
@@ -599,6 +665,18 @@ def postgrey_whitelist_checks(ctx, name, address):
     for path in list(dict.fromkeys(paths))[:12]:
         text, error = ctx.read(path)
         if text is None:
+            optional_absent = False
+            if defaults_confirmed and path.endswith(".local"):
+                try:
+                    ctx.path(path).lstat()
+                except FileNotFoundError:
+                    optional_absent = True
+                except OSError:
+                    pass
+            if optional_absent:
+                ctx.add("WHITELIST.POSTGREY_FILE", "N/A", "Необязательный локальный Postgrey whitelist отсутствует: " + clean(path),
+                        [{"source": path, "text": "optional installed-default .local file absent"}])
+                continue
             if not inferred:
                 unknown = True
                 ctx.add("WHITELIST.POSTGREY_FILE", "UNKNOWN", "Файл Postgrey недоступен: " + clean(path),
@@ -657,28 +735,141 @@ def postgrey_whitelist_checks(ctx, name, address):
     return active_matches, unknown or not readable_count or not bool((configured or configdir or defaults_confirmed) and active)
 
 
+def _postgrey_program_path(ctx, executable):
+    """Resolve Jammy's generated SysV unit via literal installed metadata.
+
+    Nothing here sources or executes the init script. Dynamic/ambiguous DAEMON
+    assignments leave defaults unconfirmed rather than guessing /usr/sbin.
+    """
+    if not executable.startswith("/etc/init.d/"):
+        return executable
+    script, _ = ctx.read(executable, 256 * 1024)
+    assignments = re.findall(r"^\s*DAEMON\s*=\s*(.*?)\s*$", script or "", re.M)
+    if len(assignments) != 1:
+        return None
+    value = assignments[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+/postgrey", value) or ".." in PurePosixPath(value).parts:
+        return None
+    return value
+
+
 def policy_listener_checks(ctx, contexts):
     endpoints = set()
     for config in contexts.values():
         for value in config.values():
             endpoints.update(re.findall(r"\bcheck_policy_service\s+(inet:[^,\s{}]+|unix:[^,\s{}]+)", value or ""))
-    if not endpoints:
-        return
-    argv = ["ss", "-ltnp"]
-    result = ctx.run(argv)
-    for endpoint in sorted(endpoints):
-        port = re.search(r":(\d+)\Z", endpoint)
-        local = bool(re.match(r"inet:(?:127\.[\d.]+|localhost|\[?::1\]?):", endpoint))
-        if not port or not local:
-            ctx.add("POLICY.LISTENER", "UNKNOWN", "Policy endpoint: " + clean(endpoint),
-                    [{"source": "postconf", "text": endpoint}],
-                    "Проверьте доступность и назначение сервиса; порт сам по себе не определяет приложение.")
+    if len(endpoints) > 80:
+        ctx.add("POLICY.COVERAGE", "UNKNOWN", "Проверка ограничена 80 policy endpoints", omitted=len(endpoints) - 80)
+    for endpoint in sorted(endpoints)[:80]:
+        if endpoint.startswith("unix:"):
+            _unix_policy_listener(ctx, endpoint)
             continue
-        lines = [line for line in result.stdout.splitlines() if re.search(r":" + port[1] + r"\s", line)]
-        status = "OK" if lines and result.ok else "WARN" if result.ok and not result.truncated else "UNKNOWN"
-        ctx.add("POLICY.LISTENER", status, endpoint + (": TCP listener найден" if lines else ": listener не подтверждён"),
-                [command_evidence(argv, result, " | ".join(lines) if lines else "no matching listen socket")],
-                "Назначение проверяйте по процессу/службе; listener не доказывает корректный policy response.", endpoint=endpoint)
+        match = re.fullmatch(r"inet:(.+):(\d{1,5})", endpoint)
+        if not match or not 0 < int(match[2]) < 65536:
+            ctx.add("POLICY.LISTENER", "UNKNOWN", "Policy endpoint не разобран: " + clean(endpoint))
+            continue
+        host, port = match[1].strip("[]"), int(match[2])
+        if ("[" in match[1] or "]" in match[1]) and not (match[1].startswith("[") and match[1].endswith("]")):
+            ctx.add("POLICY.LISTENER", "UNKNOWN", "Некорректные скобки policy endpoint: " + clean(endpoint))
+            continue
+        try:
+            targets = [ipaddress.ip_address(host)]
+        except ValueError:
+            targets = _localhost_files_targets(ctx) if host.lower() == "localhost" else []
+        argv = ["ss", "-ltnp"]
+        result = ctx.run(argv)
+        matches, ambiguous, coverage = [], False, []
+        sockets = list(_listen_socket_rows(result.stdout))
+        for target in targets:
+            found = False
+            for address, line in sockets:
+                parts = address.rsplit(":", 1)
+                if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) != port:
+                    continue
+                bound = parts[0].strip("[]")
+                if bound == "*":
+                    ambiguous = True  # ss does not expose IPV6_V6ONLY.
+                    continue
+                try:
+                    ip = ipaddress.ip_address(bound)
+                except ValueError:
+                    ambiguous = True
+                    continue
+                if ip.version == target.version and (ip == target or ip.is_unspecified and target.is_loopback):
+                    found = True
+                    matches.append(line)
+                elif target.version == 4 and ip.version == 6 and ip.is_unspecified:
+                    ambiguous = True  # Could be a dual-stack listener or IPv6-only.
+            if not found:
+                ambiguous = ambiguous or not target.is_loopback
+            coverage.append(found)
+        if any(coverage) and not all(coverage):
+            ambiguous = True  # localhost may still have a usable family fallback.
+        confirmed = bool(targets) and all(coverage) and result.ok
+        status = "OK" if confirmed else "UNKNOWN" if not result.ok or not targets or ambiguous else "WARN"
+        ctx.add("POLICY.LISTENER", status,
+                endpoint + (": адрес и семейство TCP listener подтверждены" if confirmed else ": listener целевого адреса не подтверждён"),
+                [command_evidence(argv, result, " | ".join(dict.fromkeys(matches)) if matches else "no confirmed target-address listener")],
+                "Сравниваются Local Address и семейство, не только порт. Hostname/NSS и dual-stack неизвестность не доказывают доступность; listener не доказывает корректный policy response.",
+                endpoint=endpoint, addresses=[str(target) for target in targets], address_family_confirmed=confirmed)
+
+
+def _listen_socket_rows(text):
+    """Read only the Local Address column of TCP/UNIX stream LISTEN rows."""
+    for line in text.splitlines():
+        fields = line.split()
+        state = 0 if fields and fields[0] == "LISTEN" else 1 if len(fields) > 1 and fields[1] == "LISTEN" else None
+        if state is not None and len(fields) > state + 4 and fields[state + 1].isdigit() and fields[state + 2].isdigit():
+            yield fields[state + 3], line
+
+
+def _localhost_files_targets(ctx):
+    # Avoid an implicit DNS/NSS probe. A files-first successful hosts lookup has
+    # a deterministic local answer; dynamic/missing NSS remains UNKNOWN.
+    nss, _ = ctx.read("/etc/nsswitch.conf")
+    match = re.search(r"^hosts:[ \t]*([^#\r\n]*)", nss or "", re.M)
+    sources = match[1].split() if match else []
+    if not sources or sources[0] != "files" or "\\" in match[1] or re.search(r"SUCCESS\s*=\s*(?:continue|merge)", match[1], re.I):
+        return []
+    hosts, _ = ctx.read("/etc/hosts")
+    targets = []
+    for line in (hosts or "").splitlines():
+        fields = line.split("#", 1)[0].split()
+        if len(fields) < 2 or "localhost" not in [name.lower() for name in fields[1:]]:
+            continue
+        try:
+            address = ipaddress.ip_address(fields[0])
+            if not address.is_loopback:
+                return []
+            if address not in targets:
+                targets.append(address)
+        except ValueError:
+            return []
+    return targets
+
+
+def _unix_policy_listener(ctx, endpoint):
+    name = endpoint[5:]
+    directory = ctx.postconf.get("queue_directory", "")
+    if not name or ".." in PurePosixPath(name).parts or "$" in name or any(c.isspace() for c in name):
+        path = None
+    elif name.startswith("/"):
+        path = str(PurePosixPath(name))
+    elif PurePosixPath(directory).is_absolute() and ".." not in PurePosixPath(directory).parts and "$" not in directory:
+        path = str(PurePosixPath(directory) / name)
+    else:
+        path = None
+    argv = ["ss", "-lxnp"]
+    result = ctx.run(argv)
+    matches = [line for address, line in _listen_socket_rows(result.stdout) if path is not None and address == path]
+    status = "OK" if result.ok and matches else "WARN" if result.ok and path else "UNKNOWN"
+    ctx.add("POLICY.LISTENER", status,
+            endpoint + (": UNIX stream listener найден по точному пути" if matches and result.ok else ": UNIX listener не подтверждён"),
+            [command_evidence(argv, result, " | ".join(matches) if matches else "no confirmed exact-path UNIX listener")],
+            "Показан listener в host namespace; учтите chroot/service-specific namespace и права доступа. Наличие файла socket без LISTEN не считается проверкой.",
+            endpoint=endpoint, socket_path=path, host_namespace=True)
 
 
 _RBL_RESTRICTIONS = ("reject_rbl_client", "reject_rhsbl_client", "reject_rhsbl_sender",

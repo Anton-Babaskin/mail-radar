@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import stat
 import time
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -11,6 +12,7 @@ from pathlib import Path
 from .model import finding
 
 FIELDS = "mailbox uid guid date.received date.saved date.received.unixtime date.saved.unixtime hdr.date hdr.received hdr.message-id flags"
+_FD_TRAVERSAL = os.open in os.supports_dir_fd and os.scandir in os.supports_fd and hasattr(os, "O_NOFOLLOW")
 
 
 def header_delays(record):
@@ -109,36 +111,102 @@ def physical_usage(root, user, max_files=100000, seconds=5, max_dirs=10000):
     base = Path(root) / "home/user-data/mail/mailboxes"
     target = base / domain / local
     try:
+        if local in {".", ".."} or domain in {".", ".."} or any(c in local + domain for c in "/\\"):
+            raise ValueError("Mailbox scope must be two literal path components")
         target.resolve().relative_to(base.resolve())
         if target.is_symlink() or not target.is_dir():
             raise ValueError("Target Maildir unavailable or symlink")
-    except (ValueError, OSError) as error:
+    except (ValueError, OSError, RuntimeError) as error:
         return finding("mailstore.physical", "UNKNOWN", "Физический размер ящика недоступен", evidence=[str(error)])
-    count = size = directories = 0
+    if not _FD_TRAVERSAL:
+        return finding("mailstore.physical", "UNKNOWN", "Безопасный incremental обход на этой платформе недоступен",
+                       limitation="Descriptor-relative directory access with O_NOFOLLOW is required; no unsafe path fallback is used.")
+    count = size = directories = entries = 0
     complete = True
     start = time.monotonic()
+    deadline = start + max(0, seconds)
     errors = []
+    stopped = None
+    stack = []
     def failed(error):
         if len(errors) < 20:
             errors.append(str(error))
-    for parent, dirs, files in os.walk(target, followlinks=False, onerror=failed):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+    def push(directory_fd):
+        nonlocal directories
+        try:
+            iterator = os.scandir(directory_fd)
+        except BaseException:
+            os.close(directory_fd)
+            raise
+        stack.append((directory_fd, iterator))
         directories += 1
-        if directories > max_dirs or time.monotonic()-start > seconds:
+
+    try:
+        if max_files <= 0 or max_dirs <= 0 or time.monotonic() >= deadline:
+            stopped = "entry_limit" if max_files <= 0 else "directory_limit" if max_dirs <= 0 else "time_limit"
             complete = False
-            break
-        dirs[:] = [d for d in dirs if not (Path(parent)/d).is_symlink()]
-        for name in files:
-            path = Path(parent)/name
-            if path.is_symlink():
-                continue
+        else:
+            # Keep every user-controlled component descriptor-relative. Even a
+            # directory replaced with a symlink between stat/open cannot redirect
+            # this traversal into another user's tree.
+            base_fd = os.open(str(base.resolve()), flags)
             try:
-                size += path.stat().st_size
-                count += 1
+                domain_fd = os.open(domain, flags, dir_fd=base_fd)
+                try:
+                    push(os.open(local, flags, dir_fd=domain_fd))
+                finally:
+                    os.close(domain_fd)
+            finally:
+                os.close(base_fd)
+        while stack:
+            if entries >= max_files or time.monotonic() >= deadline:
+                complete = False
+                stopped = "entry_limit" if entries >= max_files else "time_limit"
+                break
+            directory_fd, iterator = stack[-1]
+            try:
+                entry = next(iterator)
+            except StopIteration:
+                iterator.close()
+                os.close(directory_fd)
+                stack.pop()
+                continue
             except OSError as error:
                 failed(error)
-            if count >= max_files or time.monotonic()-start > seconds:
-                complete = False
+                iterator.close()
+                os.close(directory_fd)
+                stack.pop()
+                continue
+            entries += 1
+            if time.monotonic() >= deadline:
+                complete, stopped = False, "time_limit"
                 break
-        if not complete:
-            break
-    return finding("mailstore.physical", "OK" if complete and not errors else "UNKNOWN", "Ограниченный физический обход выбранного ящика", evidence=[dict(bytes=size, files=count, directories=directories, complete=complete and not errors, errors=errors[:5])], limitation="Physical file bytes include indexes and metadata, differ from allocated du blocks and IMAP quota; not a message count.")
+            try:
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    if directories >= max_dirs or len(stack) >= 128:
+                        complete, stopped = False, "directory_limit" if directories >= max_dirs else "depth_limit"
+                        break
+                    push(os.open(entry.name, flags, dir_fd=directory_fd))
+                elif stat.S_ISREG(info.st_mode):
+                    size += info.st_size
+                    count += 1
+            except OSError as error:
+                failed(error)
+    except (OSError, RuntimeError) as error:
+        failed(error)
+    finally:
+        for directory_fd, iterator in reversed(stack):
+            try:
+                iterator.close()
+            finally:
+                os.close(directory_fd)
+    return finding("mailstore.physical", "OK" if complete and not errors else "UNKNOWN", "Ограниченный физический обход выбранного ящика",
+                   evidence=[dict(bytes=size, files=count, directories=directories, entries_examined=entries,
+                                  complete=complete and not errors, stop_reason=stopped, errors=errors[:5],
+                                  entry_limit=max_files, directory_limit=max_dirs, time_limit_seconds=seconds)],
+                   limitation="Physical regular-file bytes include indexes and metadata, differ from allocated du blocks and IMAP quota; not a message count. Directory entries, including directories and skipped symlinks, consume the entry limit. The deadline is checked between filesystem operations; a blocked kernel I/O call cannot be interrupted here.")

@@ -41,9 +41,13 @@ def sanitize(value):
 def finish_report(report):
     report = sanitize(report)
     counts = {s: sum(f["status"] == s for f in report["findings"]) for s in STATUSES}
+    conclusion_counts = {s: sum(c["status"] == s for c in report.get("conclusions", [])) for s in STATUSES}
+    overall = {s: counts[s] + conclusion_counts[s] for s in STATUSES}
     incomplete = report.get("completeness", {}).get("complete") is False
-    status = "FAIL" if counts["FAIL"] else "WARN" if counts["WARN"] else "UNKNOWN" if counts["UNKNOWN"] or incomplete else "OK"
-    report["summary"] = dict(status=status, counts=counts, exit_code=2 if counts["FAIL"] else 1 if counts["WARN"] or counts["UNKNOWN"] or incomplete else 0)
+    status = "FAIL" if overall["FAIL"] else "WARN" if overall["WARN"] else "UNKNOWN" if overall["UNKNOWN"] or incomplete else "OK"
+    # Counts remain findings-only; conclusions may describe the same evidence.
+    report["summary"] = dict(status=status, counts=counts, conclusion_counts=conclusion_counts,
+                             exit_code=2 if overall["FAIL"] else 1 if overall["WARN"] or overall["UNKNOWN"] or incomplete else 0)
     report.setdefault("schema_version", "1.0")
     report.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
     if len(json.dumps(report, ensure_ascii=False).encode("utf-8")) > 8 * 1024 * 1024:
@@ -60,7 +64,8 @@ def finish_report(report):
                       findings=[{k: f.get(k, "") for k in ("id", "status", "title", "next_step")} | {"evidence": [], "details": {"omitted": True}}
                                 for f in report["findings"][:200]],
                       sources=[{k: s[k] for k in ("path", "readable", "truncated") if k in s} for s in report.get("sources", [])[:100]],
-                      completeness=dict(complete=False, limitations=["8 MiB report limit: nested evidence/details/traces omitted. Repeat with narrower filters."]),
+                      completeness=dict(complete=False, log_sources_complete=False, checks_complete=False,
+                                        limitations=["8 MiB report limit: nested evidence/details/traces omitted. Repeat with narrower filters."]),
                       **({"redaction":report["redaction"]} if "redaction" in report else {}))
     return report
 
