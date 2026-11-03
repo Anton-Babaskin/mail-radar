@@ -1,17 +1,11 @@
-Generated from examples/mail.log (synthetic documentation addresses only).
-Command: python3 -m mailradar.cli --trace sender.example --offline --log examples/mail.log --since 2026-11-02T09:00:00Z --until 2026-11-02T10:00:00Z
-Exit: 1 (UNKNOWN log coverage is expected for this short fixture).
 
-MailRadar 4.0.0 — UNKNOWN
-Период: 2026-11-02T09:00:00+00:00 — 2026-11-02T10:00:00+00:00; фильтры: {"trace": "sender.example"}
+MailRadar 4.0.1 — OK
+Период: 02.11 09:00 +0000 — 02.11 10:00 +0000; часовой пояс: UTC
+Фильтры: поиск: sender.example
 [OK] ABC123 → office@example.com: подтверждено сохранение; текущая папка требует Dovecot-поиска
-  Подтверждение: {"source": "examples/mail.log", "line": 4, "time": "2026-11-02T09:12:02+00:00", "text": "2026-11-02T09:12:02+00:00 box postfix/lmtp[103]: ABC123: to=<office@example.com>, relay=box[private/dovecot-lmtp], delay=2, delays=0.1/0.1/0.2/1.6, dsn=2.0.0, status=sent (250 2.0.0 Saved)", "dsn": "2.0.0", "delay": 2.0, "delays": {"arrival_to_last_active": 0.1, "last_active_to_connection_setup": 0.1, "connection_setup": 0.2, "message_transmission": 1.6}, "relay": "box[private/dovecot-lmtp]"}
-[UNKNOWN] Границы доступных логов не доказывают полноту периода (LOG-COVERAGE)
-  Далее: При отсутствии события запросите более ранние архивы или trace соседнего SMTP-узла.
-[OK] Наблюдаемый путь почты разобран (MAIL-FLOW)
-  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 1, "text": "2026-11-02T09:12:00+00:00 box postfix/smtpd[100]: ABC123: client=mx.sender.example[203.0.113.10]", "kind": "client", "host": "box", "instance": "postfix", "program": "postfix/smtpd", "component": "smtpd", "queue_id": "ABC123", "client_name": "mx.sender.example", "client_ip": "203.0.113.10"}
-  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 2, "text": "2026-11-02T09:12:00+00:00 box postfix/cleanup[101]: ABC123: message-id=<sample.1@sender.example>", "kind": "message_id", "host": "box", "instance": "postfix", "program": "postfix/cleanup", "component": "cleanup", "queue_id": "ABC123", "message_id": "<sample.1@sender.example>"}
-  {"time": "2026-11-02T09:12:00+00:00", "source": "examples/mail.log", "line": 3, "text": "2026-11-02T09:12:00+00:00 box postfix/qmgr[102]: ABC123: from=<sender@sender.example>, size=1900, nrcpt=1 (queue active)", "kind": "accepted", "host": "box", "instance": "postfix", "program": "postfix/qmgr", "component": "qmgr", "queue_id": "ABC123", "sender": "sender@sender.example", "size": 1900, "recipient_count": 1, "queue_state": "queue active"}
-  Далее: Удалённый SMTP 250 не доказывает внешний INBOX; Saved не доказывает текущую папку.
-Статистика: {"events": 5, "recognized_events": 5, "queues": 1, "observed_messages": 1, "delivery_attempts": 1, "recipient_delivery_events": 1, "accepted_queue_events": 1, "rejected_before_queue": 0, "auth_failures": 0, "saved_log_events": 0, "expired": 0, "hold": 0, "bounced": 0, "deferred": 0, "outcomes": {"saved": 1}, "top_authenticated_senders": {}, "top_recipient_domains": {"example.com": 1}, "delivery_reasons": {"bounced": {}, "deferred": {}}, "top_rejection_reasons": {}, "top_auth_failure_ips": {}, "overlap_events_removed": 0, "year_inferred_lines": 0}
-Доказательства заканчиваются наблюдаемыми источниками. SMTP 250 не подтверждает внешний INBOX; Saved не доказывает текущую папку.
+  Postfix delay=2.0 с; examples/mail.log:4: 2026-11-02T09:12:02+00:00 box postfix/lmtp[103]: ABC123: to=<office@example.com>, relay=box[private/dovecot-lmtp], delay=2, delays=0.1/0.1/0.2/1.6, dsn=2.0.0, status=sent (250 2.0.0 Saved)
+Поток: очередей 1; попыток доставки 1; успешных передач 1; deferred 0; bounced 0.
+Этапы: следующий SMTP 0; внутренний SMTP 0; локальный транспорт 0; Saved 1. Отказов до очереди: 0.
+Источники: 1; прочитано строк: 6; не разобрано: 0; лимит достигнут: нет.
+SMTP 250 подтверждает следующий hop; Saved — сохранение в момент события, а не текущую папку.
+Подробности: --details; машинный отчёт: --json; приватный файл: --report НОВЫЙ_ПУТЬ.
