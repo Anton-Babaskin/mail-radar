@@ -137,6 +137,30 @@ Executed in WSL Ubuntu on the `fix/dnsbl-return-codes` branch:
   to this user, so the real `dig`/Runner path was not exercised in this run;
   it is unchanged and covered by the fake-runner suite.
 
+## Structured log parsing (2026-11-03)
+
+Executed in WSL Ubuntu on the `fix/structured-log-parsing` branch:
+
+* Before the change, a probe fed one line per case to `analyze_logs` on `main`
+  with Python 3.9.24, 3.10.19 and 3.14.4. These lines were lost or marked the
+  source incomplete on every version: warning/fatal lines (taken as Queue IDs),
+  RBL reject with `;` in the reason, quoted local parts with `>` in `to=`,
+  `orig_to=` and `from=`, `client=…:port`, `sasl_sender=`, pickup, bounce
+  notification, `lost connection`, `reject_warning`. MIAB
+  `postfix/submission/smtpd` lines were dropped silently with `complete=True`.
+  journald `+0300` and nanosecond timestamps failed on 3.9 and 3.10 only.
+  After the change every case parses on all three versions; the injected
+  `nrcpt=9` inside a quoted sender does not replace the real `nrcpt=1`.
+* `python -m unittest discover -s tests` passed **134 tests** on each of the
+  three versions (8 added). The 15 tests added in both stages fail when run
+  against the `main` code. ShellCheck 0.8.0/0.11.0 and `bash -n` passed.
+* The documented offline example gives exit 1 on `main` and on the branch;
+  `examples/output.txt` differs only by the new `reject_warnings` and
+  `daemon_warnings` statistics, which were regenerated.
+
+No real mail.log from a production server was available; the line shapes come
+from Postfix sources, MIAB's `setup/mail-postfix.sh` and synthetic fixtures.
+
 ## Deliberately not claimed
 
 No test here establishes delivery to an external INBOX, validates production

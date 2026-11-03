@@ -105,8 +105,13 @@ and prohibits journal/network commands. `--max-bytes` and `--max-lines` bound
 input; hitting a limit marks results incomplete instead of implying no errors.
 
 Common anchored Postfix/Postgrey/Dovecot log formats are recognized; unsupported
-delivery grammar marks coverage incomplete. Yearless syslog is interpreted as
-the newest calendar occurrence not later than `--until`; multi-year archives
+delivery grammar marks coverage incomplete. Addresses are read quote-aware, so a
+quoted local part cannot shift the fields after it; Queue IDs must match the
+Postfix short or long format. Multi-level `syslog_name` values such as MIAB's
+`postfix/submission/smtpd` stay in the `postfix` instance, and journal lines
+with `+0300` offsets (systemd before 255) parse on Python 3.9/3.10.
+Yearless syslog is interpreted as the newest calendar occurrence not later
+than `--until`; multi-year archives
 need explicit-year timestamps (`--year` supplies a single year). Reinjection is
 linked only by explicit same-host evidence with a unique target within 300
 seconds. `observed_messages` counts inferred linked groups and can overcount
