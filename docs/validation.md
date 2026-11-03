@@ -208,3 +208,15 @@ return-code semantics/privacy, malformed/oversized reply filters, HELO/DATA
 and master overrides, postscreen weights/threshold/action/allowlisting,
 indirect-coverage uncertainty, and the extra policy/header/remote-reply
 grammars without invented deliveries. Live MIAB validation remains unclaimed.
+
+GitHub Actions [run 41629045110](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41629045110)
+completed successfully for code head `93d69f440f6458c206b2496d42c4893939d2533e`:
+
+| Ubuntu 22.04 job | Observed result |
+|---|---|
+| [Python 3.9](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41629045110/job/125893613667) | 169 tests passed, 10.105 s; Ruff, ShellCheck and Bash syntax passed |
+| [Python 3.10](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41629045110/job/125893613388) | 169 tests passed, 9.325 s; Ruff, ShellCheck and Bash syntax passed |
+
+Both logs report dnsutils `DiG 9.18.39-0ubuntu0.22.04.7-Ubuntu`; neither test
+suite skipped the real-dig integration cases. This subsequent documentation
+commit only records that completed run and does not change the tested code.
