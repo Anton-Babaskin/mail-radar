@@ -97,10 +97,22 @@ On Windows the above Docker commands were invoked via WSL Ubuntu as root to
 access its local Docker daemon. Earlier focused WSL runs used Python 3.14;
 they supplement the actual Python 3.9/Ubuntu 22.04 compatibility runs.
 
-`.github/workflows/ci.yml` specifies Ubuntu 22.04 with Python 3.9 and 3.10,
-unittest discovery, Bash syntax for each launcher/installer, and ShellCheck.
-That workflow configuration is not a claim that a GitHub Actions run passed;
-the executed local Linux/container checks are recorded above.
+## GitHub Actions actually verified
+
+On 2026-11-03, the completed [Linux validation run 41473540443](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41473540443)
+was checked for PR #2 at head
+`8261697bb762d573b6ff12ef30d7a7b75528668b`. Both Ubuntu 22.04 matrix jobs
+completed successfully, including Bash syntax, ShellCheck and the full suite:
+
+| Job | Logged result |
+|---|---|
+| [Python 3.9](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41473540443/job/125373045075) | 119 tests passed; 6.716 s |
+| [Python 3.10](https://github.com/Anton-Babaskin/mail-radar/actions/runs/41473540443/job/125373045464) | 119 tests passed; 7.931 s |
+
+The run itself completed on 2026-11-02; the date above records when its
+conclusions and test-count logs were verified. The subsequent validation-record
+update changes documentation only. These CI jobs use fixtures and fake commands;
+they do not establish live mail-server correctness.
 
 ## Deliberately not claimed
 
