@@ -2,3 +2,7 @@
 *.tmp
 *.swp
 *.gz
+!tests/fixtures/**/*.log
+!examples/mail.log
+__pycache__/
+*.py[cod]

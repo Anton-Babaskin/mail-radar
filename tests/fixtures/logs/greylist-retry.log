@@ -1,0 +1,6 @@
+2026-11-02T09:00:00Z box.local.example postgrey[201]: action=greylist, reason=new, client_name=mx.partner.example, client_address=192.0.2.10, sender=sender@partner.example, recipient=office@local.example
+2026-11-02T09:01:00Z box.local.example postgrey[201]: action=greylist, reason=early-retry, client_name=mx.partner.example, client_address=192.0.2.10, sender=sender@partner.example, recipient=office@local.example
+2026-11-02T09:06:00Z box.local.example postgrey[201]: action=pass, reason=triplet found, client_name=mx.partner.example, client_address=192.0.2.10, sender=sender@partner.example, recipient=office@local.example
+2026-11-02T09:07:00Z box.local.example postgrey[201]: action=greylist, reason=new, client_name=mx.partner.example, client_address=192.0.2.11, sender=sender@partner.example, recipient=office@local.example
+2026-11-02T09:08:00Z box.local.example postgrey[201]: action=pass, reason=client AWL, client_name=mx.partner.example, client_address=192.0.2.12, sender=sender@partner.example, recipient=office@local.example
+2026-11-02T09:09:00Z box.local.example postgrey[201]: action=pass, reason=client whitelist, client_name=mx.partner.example, client_address=192.0.2.13, sender=sender@partner.example, recipient=office@local.example
