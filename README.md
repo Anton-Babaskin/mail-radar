@@ -135,7 +135,12 @@ No SMTP AUTH, test message, OTP request or real relay delivery is performed.
 A known DKIM selector is used rather than guessing several names and declaring
 DKIM absent. Local success does not establish external firewall/provider access.
 DNS failures and DNSBL service/error replies remain distinct from a valid clean
-or listed result; IP reputation and domain reputation are separate.
+or listed result; IP reputation and domain reputation are separate. Spamhaus
+error replies are named: `127.255.255.254` (query through a public resolver),
+`.255` (query limit) and `.252` (zone name error) keep reputation UNKNOWN, and a
+refused control query is a WARN about the host's resolver. Without `--network`,
+`DNSBL.POSTFIX_FILTER` still checks that Postfix RBL restrictions for public
+Spamhaus zones have a reply filter, so error replies cannot become rejections.
 
 ## Findings, JSON and exit codes
 

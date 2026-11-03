@@ -50,11 +50,29 @@ primary-source text was retrieved through the web-search connector instead.
   errors are not listings. Positive/negative operational controls are required
   because some public resolver paths synthesize NXDOMAIN. Radar checks controls
   before interpreting a target response and reports UNKNOWN if they fail.
+  Re-checked 2026-11-03: `127.255.255.0/24` are errors in any zone, never a
+  listing: `.252` typing error in the DNSBL name, `.254` query via a public/open
+  resolver, `.255` excessive number of queries. Radar names them
+  (`zone_name_error`, `public_resolver_blocked`, `query_limit_exceeded`), keeps
+  the reputation UNKNOWN and also runs the controls. An error code on a control
+  is a confirmed refusal of the query path and gives `DNSBL.CONTROL.*` WARN.
 * [Spamhaus DBL](https://www.spamhaus.org/faqs/domain-blocklist/): public domain
   codes and domain-specific controls differ from IP ZEN. Radar distinguishes
-  the two kinds and treats unknown/service codes as UNKNOWN. The
+  the two kinds and treats unknown/service codes as UNKNOWN. `127.0.1.255`
+  means an IP address was queried on the DBL (`ip_query_on_domain_list`). The
   [DQS zone contract](https://docs.spamhaus.com/datasets/docs/source/10-data-type-documentation/datasets/040-zones.html)
   is not silently substituted for the public-zone contract.
+* Postfix `reject_rbl_client`/`reject_rhsbl_*` (`proto/postconf.proto`):
+  without `=d.d.d.d` the request is rejected when the name is listed with *any*
+  A record; each `d` is a number or, from Postfix 2.8, `[...]` with
+  `;`-separated numbers and `n..m` ranges. An unfiltered public Spamhaus zone
+  therefore rejects on the error replies above (Spamhaus warns that such servers
+  reject all mail). `DNSBL.POSTFIX_FILTER` evaluates the configured filter
+  against those codes in the selected `smtpd_*_restrictions` and master.cf
+  overrides; MIAB at the commit above uses `zen.spamhaus.org=127.0.0.[2..11]`
+  and `dbl.spamhaus.org=127.0.1.[2..99]`, which exclude them. Restriction
+  classes, access-map actions, `smtpd_helo/data_restrictions` and postscreen
+  are not evaluated.
 * [MIAB v78 backup implementation](https://github.com/mail-in-a-box/mailinabox/blob/v78/management/backup.py):
   `backup_status` uses collection/listing operations and credential environment,
   rather than a lightweight versioned success artifact usable by Radar. Radar

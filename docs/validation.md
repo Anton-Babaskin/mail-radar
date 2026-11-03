@@ -114,6 +114,29 @@ conclusions and test-count logs were verified. The subsequent validation-record
 update changes documentation only. These CI jobs use fixtures and fake commands;
 they do not establish live mail-server correctness.
 
+## DNSBL return codes (2026-11-03)
+
+Executed in WSL Ubuntu on the `fix/dnsbl-return-codes` branch:
+
+* `python -m unittest discover -s tests` passed **126 tests** with Python 3.9.24,
+  3.10.19 and 3.14.4 (119 before, 7 added). `bash -n` and ShellCheck 0.8.0 and
+  0.11.0 passed for `mail-radar`, `miab-radar`, `install.sh`.
+* A stdlib script sent raw UDP DNS queries for the documented Spamhaus test
+  names only (`2.0.0.127.zen`, `1.0.0.127.zen`, `test.dbl`, `dbltest.com.dbl`,
+  `example.com.dbl`) and classified the real answers with `dnsbl_state`:
+
+  | Resolver | ZEN controls | DBL positive / negative |
+  |---|---|---|
+  | WSL system resolver (Windows/ISP path) | `127.255.255.254` on both → `public_resolver_blocked` | `127.0.1.2` / NXDOMAIN → listed / not_listed |
+  | 8.8.8.8 | NXDOMAIN on both → positive control fails | NXDOMAIN on both → positive control fails |
+  | 1.1.1.1 | `127.255.255.254` on both | `127.255.255.254` on all three |
+  | 9.9.9.9 | `127.255.255.254` on both | `test.dbl` `.254`, `dbltest.com` `127.0.1.2`, negative NXDOMAIN |
+
+  Answers depend on the resolver, the zone and the moment; they are not
+  reproducible test data. `dig` was not installed and Docker was not available
+  to this user, so the real `dig`/Runner path was not exercised in this run;
+  it is unchanged and covered by the fake-runner suite.
+
 ## Deliberately not claimed
 
 No test here establishes delivery to an external INBOX, validates production

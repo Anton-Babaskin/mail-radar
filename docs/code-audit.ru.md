@@ -138,3 +138,18 @@ policy match без данных о конфигурации того време
   Источник с несколькими годами требует timestamp с явным годом; один `--year`
   задаёт один год и не восстанавливает отсутствующие исторические годы.
 * EXT-A001 остаётся внешней находкой; соседний проект в этом PR не исправлялся.
+
+## Третий проход: коды ответа DNSBL (2026-11-03)
+
+Проход выполнен по рекомендации review mail-sec-audit 2026-11 (раздел 8) поверх
+`32a0bb6` (merge PR #2). Разбор rcode и отказ считать 127.255.255.x listing уже
+были в PR #2; ниже то, чего не хватало.
+
+| ID / приоритет | Подтверждение | Исправление и регрессия |
+|---|---|---|
+| MR-T001 / P1 | `checks.dnsbl_state` сводил 127.255.255.252/254/255 и DBL 127.0.1.255 в `service_or_unrecognized_response`; controls для таких ответов не запускались, причина в отчёте не появлялась. Запуском 2026-11-03: resolver WSL этой машины получает 127.255.255.254 на оба control-имени ZEN, `1.1.1.1` — на все имена ZEN и DBL (сырые DNS-запросы к документированным тестовым именам, `docs/validation.md`). | Коды названы (`zone_name_error`, `public_resolver_blocked`, `query_limit_exceeded`, `ip_query_on_domain_list`, `mixed_error_response`), репутация остаётся UNKNOWN, controls запускаются; код ошибки на control даёт `DNSBL.CONTROL.*` WARN с исправлением. `test_checks`: `test_spamhaus_error_codes_are_named_and_never_listed`, `test_public_resolver_refusal_is_a_confirmed_control_warning`, `test_rate_limited_target_with_passing_controls_stays_unknown`. |
+| MR-T002 / P1 | Конфигурация Postfix не проверялась на фильтр кодов ответа. По `proto/postconf.proto` без `=d.d.d.d` отказ выдаётся на любой A-ответ, то есть на коды ошибок Spamhaus; при заблокированном resolver это отказ всей входящей почте. Подтверждено по документации Postfix, на Postfix не воспроизводилось. | `DNSBL.POSTFIX_FILTER` разбирает `reject_rbl_client`/`reject_rhsbl_*` для публичных зон Spamhaus в выбранных restrictions и overrides master.cf, вычисляет фильтр (`n`, `[n;m..k]`) на кодах ошибок. Фильтры MIAB проходят. `test_postfix_reply_filter_syntax`, `test_unfiltered_spamhaus_zone_in_postfix_would_reject_on_error_codes`, `test_miab_reply_filters_pass_and_dqs_zone_is_not_judged`, `test_postfix_filter_without_spamhaus_or_readable_chains`. |
+
+Не моделируются: restriction classes, действия access maps, `smtpd_helo_restrictions`,
+`smtpd_data_restrictions` и `postscreen_dnsbl_sites` (у postscreen ещё веса,
+threshold и `postscreen_dnsbl_action`). Об этом сообщает finding покрытия.
