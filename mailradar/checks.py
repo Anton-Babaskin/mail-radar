@@ -626,7 +626,8 @@ def whitelist_checks(ctx, contexts):
             continue
         source = ctx.path(path)
         try:
-            paths = [source] + ([ctx.path(path + ".db")] if backend in {"hash", "btree"} else [])
+            index_suffix = {"hash": ".db", "btree": ".db", "lmdb": ".lmdb", "cdb": ".cdb"}.get(backend)
+            paths = [source] + ([ctx.path(path + index_suffix)] if index_suffix else [])
             sensitive = any(_SENSITIVE.search(str(candidate.resolve())) for candidate in paths)
         except (OSError, ValueError, RuntimeError):
             uncertain = True

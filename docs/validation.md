@@ -11,8 +11,8 @@ The sections below this one retain the historical verification record.
 
 | Environment | Final full suite | Result |
 |---|---|---|
-| Ubuntu 22.04, stock Python **3.10.12**, dnsutils | `python3 -m unittest discover -s tests` | **281 tests passed**, no skips; **23.030 s** |
-| Python **3.9.25**, dnsutils | `python -m unittest discover -s tests` | **281 tests passed**, no skips; **61.989 s** |
+| Ubuntu 22.04, stock Python **3.10.12**, dnsutils | `python3 -m unittest discover -s tests` | **281 tests passed**, no skips; **23.043 s** |
+| Python **3.9.25**, dnsutils | `python -m unittest discover -s tests` | **281 tests passed**, no skips; **61.730 s** |
 
 Both disposable Docker containers ran under WSL Ubuntu with `--network none`,
 `--read-only`, a read-only checkout and a private executable `/tmp` tmpfs.
@@ -38,6 +38,9 @@ Additional completed checks:
   Runner/stdin, invalid offsets/extreme dates, expired-only sender evidence,
   bounded suffix allocation, invalid command JSON/metadata, sensitive map paths,
   retained mailbox conclusions and oversized watch termination.
+  The whitelist index guard covers eight hash/btree/LMDB/CDB plus cycle cases;
+  the additional LMDB/CDB sensitive-index probes failed before expanding the
+  guard and passed in the final full runs recorded above.
 * `python3 tests/render_task_examples.py` regenerated the anonymized task
   previews with fake host commands and loopback DNS, networking disabled.
 * Final `git diff --check` passed.

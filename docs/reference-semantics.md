@@ -14,6 +14,13 @@ Postfix/Dovecot or establish the versions installed on the owner's MIAB.
   missed. IDs can be reused and do not identify messages across instances.
   Radar handles unknown/malformed records as incomplete and uses text fallback
   only when JSON is unsupported, not after arbitrary queue errors.
+* [Postfix database overview](https://www.postfix.org/DATABASE_README.html),
+  [CDB](https://www.postfix.org/CDB_README.html) and
+  [LMDB](https://www.postfix.org/LMDB_README.html), checked 2026-11-04:
+  backend names omit the actual `.db`, `.cdb` or `.lmdb` index suffix. The
+  credential-path exclusion checks these resolved index files as well as the
+  named source before any whitelist query. This is a path-boundary test, not a
+  claim that real LMDB/CDB libraries ran in the fixtures.
 * [Postfix SMTP policy delegation](https://www.postfix.org/SMTPD_POLICY_README.html)
   and [standard configurations](https://www.postfix.org/STANDARD_CONFIGURATION_README.html):
   Postfix 2.10+ supports a separate relay restriction chain. Absence of a guard

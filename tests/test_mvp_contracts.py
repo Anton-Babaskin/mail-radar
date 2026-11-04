@@ -123,8 +123,8 @@ class MVPContractTests(unittest.TestCase):
                 self.assertEqual(result["evidence"], [])
 
     def test_sensitive_index_and_symlink_cycle_never_trigger_postmap(self):
-        for cycle in (False, True):
-            with self.subTest(cycle=cycle), tempfile.TemporaryDirectory() as directory:
+        for backend, cycle in ((backend, cycle) for backend in ("hash", "btree", "lmdb", "cdb") for cycle in (False, True)):
+            with self.subTest(backend=backend, cycle=cycle), tempfile.TemporaryDirectory() as directory:
                 folder = Path(directory) / "etc/postfix"
                 folder.mkdir(parents=True)
                 source = folder / "clients"
@@ -132,11 +132,12 @@ class MVPContractTests(unittest.TestCase):
                     source.symlink_to(source.name)
                 else:
                     source.write_text("partner.example OK\n", encoding="utf-8")
-                    (folder / "sasl_passwd.db").write_text("PRIVATE FIXTURE", encoding="utf-8")
-                    (folder / "clients.db").symlink_to("sasl_passwd.db")
+                    suffix = {"hash": ".db", "btree": ".db", "lmdb": ".lmdb", "cdb": ".cdb"}[backend]
+                    (folder / ("sasl_passwd" + suffix)).write_text("PRIVATE FIXTURE", encoding="utf-8")
+                    (folder / ("clients" + suffix)).symlink_to("sasl_passwd" + suffix)
                 runner = FakeRunner()
                 args = SimpleNamespace(root=directory, client_name="mx.partner.example", client_ip=None)
                 ctx = checks.Context(runner, args)
-                checks.whitelist_checks(ctx, {"global": {"smtpd_client_restrictions": "check_client_access hash:/etc/postfix/clients"}})
+                checks.whitelist_checks(ctx, {"global": {"smtpd_client_restrictions": "check_client_access " + backend + ":/etc/postfix/clients"}})
                 self.assertFalse(any(cmd[0] == "postmap" for cmd in runner.history))
                 self.assertTrue(any(f["id"] == "WHITELIST.MAP" and f["status"] == "UNKNOWN" for f in ctx.findings))
