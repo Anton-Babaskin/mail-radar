@@ -56,7 +56,7 @@ class RuntimeCliTests(unittest.TestCase):
             human(report)
         self.assertIn("ABCDE", output.getvalue())
         self.assertIn("[FAIL]", output.getvalue())
-        self.assertIn("Ещё выводов: 13", output.getvalue())
+        self.assertIn("показано 20 из 21", output.getvalue())
 
     def test_standalone_saved_is_visible_without_inventing_queue_or_double_count(self):
         run = self.execute("Nov 02 09:25:36 lmtp(office@local.example)<123><session>: Info: msgid=<one@partner.example>: saved mail to INBOX\n", "--diagnose", "--json")

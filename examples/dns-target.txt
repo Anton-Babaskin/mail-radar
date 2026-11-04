@@ -1,0 +1,132 @@
+Обезличенный пример: dig использует только loopback DNS; остальные команды подменены.
+MailRadar 4.1.0 — WARN
+DNS / TLS / resolver / relay
+Период: 03.11 14:00 +0400 — 03.11 15:00 +0400; часовой пояс: Asia/Dubai
+  Фильтры: домен: example.org
+
+Что проверяется
+  Локальный почтовый узел: box.example.org
+  Выбранный DNS-домен: example.org
+  Имя для проверки TLS: box.example.org
+
+Resolver / DNS / TLS / репутация
+[WARN] DMARC _dmarc.example.org: NXDOMAIN; нужная запись не найдена
+  DNS-запрос: _dmarc.example.org
+  Тип записи: TXT
+  Ответ DNS: NXDOMAIN
+  Далее: Наличие записи не является полной SPF/DKIM/DMARC/DANE/MTA-STS валидацией и не доказывает доставку.
+[WARN] PTR публичного IPv4: NXDOMAIN; соответствие не подтверждено
+  Имя узла: box.example.org
+[UNKNOWN] Зоны Spamhaus в restrictions Postfix: часть цепочек не прочитана или не разобрана
+  Основание: postconf: selected smtpd client/sender/recipient/relay/helo/data/end_of_data restrictions
+  Далее: Restriction classes и действия access maps не раскрываются; postscreen проверяется отдельно.
+[UNKNOWN] DKIM selector не задан; отсутствие DKIM не утверждается
+  Далее: Возьмите selector из реальной DKIM-Signature или signing-конфигурации и укажите --dkim-selector.
+[UNKNOWN] box.example.org:25: TLS-проба не завершена успешно
+  Имя узла: box.example.org
+  Протокол: STARTTLS
+  Порт: 25
+  Основание: Host command is stubbed in isolated dig integration
+  Далее: Проверка касается одного порта и возможностей локального OpenSSL; локальная/внутренняя доступность не
+  доказывает доступ извне.
+[UNKNOWN] box.example.org:587: TLS-проба не завершена успешно
+  Имя узла: box.example.org
+  Протокол: STARTTLS
+  Порт: 587
+  Основание: Host command is stubbed in isolated dig integration
+  Далее: Проверка касается одного порта и возможностей локального OpenSSL; локальная/внутренняя доступность не
+  доказывает доступ извне.
+[UNKNOWN] box.example.org:465: TLS-проба не завершена успешно
+  Имя узла: box.example.org
+  Протокол: implicit TLS
+  Порт: 465
+  Основание: Host command is stubbed in isolated dig integration
+  Далее: Проверка касается одного порта и возможностей локального OpenSSL; локальная/внутренняя доступность не
+  доказывает доступ извне.
+[UNKNOWN] box.example.org:993: TLS-проба не завершена успешно
+  Имя узла: box.example.org
+  Протокол: implicit TLS
+  Порт: 993
+  Основание: Host command is stubbed in isolated dig integration
+  Далее: Проверка касается одного порта и возможностей локального OpenSSL; локальная/внутренняя доступность не
+  доказывает доступ извне.
+[UNKNOWN] box.example.org:443: TLS-проба не завершена успешно
+  Имя узла: box.example.org
+  Протокол: implicit TLS
+  Порт: 443
+  Основание: Host command is stubbed in isolated dig integration
+  Далее: Проверка касается одного порта и возможностей локального OpenSSL; локальная/внутренняя доступность не
+  доказывает доступ извне.
+[OK] Resolver из resolv.conf: 127.0.0.1
+  Resolvers: 127.0.0.1
+[OK] Resolver 127.0.0.1: example.org MX → NOERROR
+  Ответ DNS: NOERROR
+  Resolver: 127.0.0.1
+  DNS-ответ: 10 box.example.org.
+[OK] MX example.org: NOERROR
+  DNS-запрос: example.org
+  Тип записи: MX
+  Ответ DNS: NOERROR
+  DNS-ответ: 10 box.example.org.
+[OK] SPF example.org: NOERROR
+  DNS-запрос: example.org
+  Тип записи: TXT
+  Ответ DNS: NOERROR
+  DNS-ответ: "v=spf1 -all"
+[OK] A box.example.org: NOERROR
+  DNS-запрос: box.example.org
+  Тип записи: A
+  Ответ DNS: NOERROR
+  DNS-ответ: 192.0.2.10
+[OK] AAAA box.example.org: NOERROR
+  DNS-запрос: box.example.org
+  Тип записи: AAAA
+  Ответ DNS: NOERROR
+  DNS-ответ: 2001:db8::10
+[OK] ip DNSBL: positive/negative operational controls passed
+  Resolver: system default
+[OK] ip IPv4 reputation: not_listed
+  DNS-запрос: 10.2.0.192.zen.spamhaus.org
+  Ответ DNS: NXDOMAIN
+[OK] domain DNSBL: positive/negative operational controls passed
+  Resolver: system default
+[OK] domain reputation: not_listed
+  DNS-запрос: example.org.dbl.spamhaus.org
+  Ответ DNS: NXDOMAIN
+[N/A] Postscreen не найден в master.cf
+[N/A] Явные chroot=y SMTP-services не найдены в master.cf
+  Основание: postconf -M: explicit chroot SMTP services: none
+[N/A] MTA_STS _mta-sts.example.org: NXDOMAIN; нужная запись не найдена
+  DNS-запрос: _mta-sts.example.org
+  Тип записи: TXT
+  Ответ DNS: NXDOMAIN
+[N/A] TLS_RPT _smtp._tls.example.org: NXDOMAIN; нужная запись не найдена
+  DNS-запрос: _smtp._tls.example.org
+  Тип записи: TXT
+  Ответ DNS: NXDOMAIN
+[N/A] DANE _25._tcp.box.example.org: NXDOMAIN; нужная запись не найдена
+  DNS-запрос: _25._tcp.box.example.org
+  Тип записи: TLSA
+  Ответ DNS: NXDOMAIN
+[N/A] Публичный IPv6 сервера не подтверждён metadata; PTR/IP DNSBL не проверялись
+
+Маршрут Postfix / защита relay
+[UNKNOWN] Ограничения Postfix прочитаны не полностью
+  Основание: postconf -h smtpd_recipient_restrictions: Host command is stubbed in isolated dig integration
+  Основание: postconf -h smtpd_relay_restrictions: Host command is stubbed in isolated dig integration
+  Далее: Проверьте доступ к postconf; не считайте отсутствие вывода пустой конфигурацией.
+[UNKNOWN] global: эффективная защита relay не подтверждена
+  Контекст: global
+  Основание: postconf: global: recipient=None; relay=None
+  Далее: Локальная проверка наличия guard не является внешним open-relay test; учтите restriction classes и порядок.
+[UNKNOWN] Исходящий relayhost: неизвестен
+  Основание: postconf -h relayhost: empty or unavailable
+  Основание: postconf -h transport_maps: unknown
+  Далее: Relay acceptance не очищает domain reputation и не доказывает внешний INBOX; credential maps не читаются.
+
+Источники и границы вывода
+Логи в этой задаче не выбирались; текущие проверки показаны выше.
+  Полнота необходимых проверок: нет
+SMTP 250 подтверждает следующий hop; Saved — сохранение в момент события, а не текущую папку.
+Полный структурированный результат: --json; приватный файл: --report НОВЫЙ_ПУТЬ. --details расширяет timeline и
+основания.

@@ -114,6 +114,10 @@ There is no runtime dependency on the Git checkout or on sibling projects.
 |---|---|
 | `--doctor` | Fast state snapshot: services, queue, configuration, disks and log evidence |
 | `--diagnose` | Targeted delivery investigation with available host and mailbox facts |
+| `--incoming`, `--outgoing`, `--delay` | Incoming, outgoing and delay investigations with message paths and relevant mail checks |
+| `--queue` | Current queue entries, sender/recipients, age, size and per-recipient causes; historical refusals in a separate section |
+| `--dns` | Selected domain DNS plus this MIAB's TLS, resolver and relay; targets are shown explicitly |
+| `--account --user ADDRESS` | Local userdb, structured quota and filesystem capacity; no mailbox/header search |
 | `--trace VALUE` | Correlated queues/events matching a literal Message-ID, queue ID, address, domain or IP |
 | `--flow` | Shared-window message/queue/recipient-event and failure statistics |
 | `--greylist` | Postgrey reject/pass/retry evidence and triplet boundaries |
@@ -134,7 +138,9 @@ honoured. For historical syslog without a year, pass `--year` and `--timezone`
 times require an explicit offset. The report lists source and parsing limits.
 
 `--log PATH` is repeatable and supports plain files, gzip, bzip2 and xz; `--log -`
-reads stdin. Without explicit paths, local `mail.log*`/`maillog*` are discovered. Automatic
+reads stdin. Mail-history workflows discover local `mail.log*`/`maillog*` when no
+paths are supplied. DNS, whitelist, account and mailbox/header lookups do not
+automatically scan unrelated logs; explicit `--log`/`--journal` can add history. Automatic
 plain-file scans retain a bounded recent suffix first, with negative line
 numbers counting from EOF. Omitted prefixes are explicitly incomplete context;
 this is not proof of a fully covered interval. Explicit `--log` scans retain
@@ -147,7 +153,10 @@ Compressed input files are limited to 128 MiB each; LZMA decoder dictionary
 memory is limited to 64 MiB. A rejected archive is reported as UNKNOWN.
 
 Common anchored Postfix/Postgrey/Dovecot log formats are recognized; unsupported
-delivery grammar marks coverage incomplete. Yearless syslog is interpreted as
+delivery grammar within the selected window marks coverage incomplete. Known
+out-of-window grammar failures are counted separately as `unparsed_context`;
+unknown timestamps, unreadable sources and read limits still mark incompleteness.
+Pre-window correlation evidence is retained. Yearless syslog is interpreted as
 the newest calendar occurrence not later than `--until`; multi-year archives
 need explicit-year timestamps (`--year` supplies a single year). Reinjection is
 linked only by explicit same-host evidence with a unique target within 300

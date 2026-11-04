@@ -548,7 +548,7 @@ def _matches(events, filters):
         return True
     fields = {key: [e.get(key) for e in events] for key in
               ("sender", "recipient", "orig_to", "client_ip", "message_id", "queue_id", "client_name")}
-    for name, field in (("from", "sender"), ("to", "recipient"), ("ip", "client_ip"), ("message_id", "message_id")):
+    for name, field in (("from", "sender"), ("to", "recipient"), ("ip", "client_ip"), ("client_name", "client_name"), ("message_id", "message_id")):
         requested = filters.get(name)
         values = fields[field] + (fields["orig_to"] if name == "to" else [])
         if requested and not _literal_match(values, requested, case_sensitive=name == "message_id"):
@@ -715,6 +715,9 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
     Limits apply globally to decompressed bytes and lines, before time filtering.
     Exact overlap is deduplicated using maximum occurrence count per source; real
     identical repetitions in one source remain separate events.
+    Known-time event grammar failures outside the report window are counted as
+    unparsed_context, without discarding usable pre-window queue context. Read
+    losses and lines whose time cannot be determined remain report-wide gaps.
     """
     if since.tzinfo is None or until.tzinfo is None or since > until:
         raise ValueError("since/until must be ordered timezone-aware datetimes")
@@ -729,7 +732,8 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
     for path in paths:
         path = str(path)
         source = {"path": _clean(path), "readable": False, "bytes": 0, "lines": 0,
-                  "unparsed_lines": 0, "ignored_lines": 0, "truncated": False, "errors": [], "first_time": None, "last_time": None}
+                  "unparsed_lines": 0, "unparsed_context": 0, "ignored_lines": 0,
+                  "truncated": False, "errors": [], "first_time": None, "last_time": None}
         sources.append(source)
         local_counts = Counter()
         try:
@@ -799,7 +803,10 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                     if event["kind"] == "other":
                         source["ignored_lines"] += 1
                     if event.get("_unparsed"):
-                        source["unparsed_lines"] += 1
+                        if since <= stamp <= until:
+                            source["unparsed_lines"] += 1
+                        else:
+                            source["unparsed_context"] += 1
                     events.append(event)
         except (OSError, EOFError, lzma.LZMAError, ValueError) as exc:
             source["errors"].append(_clean(exc))
@@ -820,6 +827,8 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
     statuses = Counter(e["status"] for e in deliveries)
     outcomes = Counter(e["outcome"] for e in deliveries)
     auth_senders = Counter(e["authenticated_user"] for e in visible if e.get("authenticated_user"))
+    sender_addresses = Counter(e["sender"] for e in visible if e.get("sender"))
+    recipient_addresses = Counter(e["recipient"] for e in visible if e.get("recipient"))
     recipient_domains = Counter(e["recipient"].rsplit("@", 1)[-1].casefold() for e in deliveries if e["status"] == "sent" and "@" in e["recipient"])
     reasons = {status: dict(Counter(e["reason"] for e in deliveries if e["status"] == status).most_common(10)) for status in ("bounced", "deferred")}
     # Connected explicit reinjections form one inferred message group; isolated
@@ -848,6 +857,10 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
                   "expired": kinds.get("expired", 0), "hold": kinds.get("hold", 0), "bounced": statuses.get("bounced", 0),
                   "deferred": statuses.get("deferred", 0), "outcomes": dict(outcomes),
                   "top_authenticated_senders": dict(auth_senders.most_common(10)),
+                  "observed_sender_addresses": dict(sender_addresses.most_common(20)),
+                  "observed_recipient_addresses": dict(recipient_addresses.most_common(20)),
+                  "sender_address_count": len(sender_addresses), "recipient_address_count": len(recipient_addresses),
+                  "address_group_basis": "structured_events_in_window",
                   "top_recipient_domains": dict(recipient_domains.most_common(10)),
                   "delivery_reasons": reasons,
                   "top_rejection_reasons": dict(Counter(e["reason"] for e in visible if e["kind"] == "rejected").most_common(10)),
@@ -915,10 +928,13 @@ def analyze_logs(paths, since, until, timezone="UTC", year=None, filters=None,
     completeness = {"complete": complete, "window_coverage_proven": False,
                     "bytes_read": bytes_read, "lines_read": lines_read,
                     "unparsed_lines": sum(s["unparsed_lines"] for s in sources),
+                    "unparsed_context": sum(s["unparsed_context"] for s in sources),
                     "rotation_gaps": rotation_gaps,
                     "truncated": any(s["truncated"] for s in sources),
                     "limitations": ["No supplied log set proves absence of earlier attempts or external delivery.",
                                     "Yearless timestamps use the newest calendar occurrence at/before --until unless --year is given; sources older than one year require explicit years.",
                                     "Queue lifecycle is unknown if creation/removal context is missing."]}
+    if completeness["unparsed_context"]:
+        completeness["limitations"].append("Unparsed dated events outside the report window are counted separately; correlation context may be incomplete.")
     return _clean_tree({"findings": findings, "sources": sources, "completeness": completeness,
                         "statistics": statistics, "traces": traces, "evidence": evidence})

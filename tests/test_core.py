@@ -166,7 +166,8 @@ class CLITests(unittest.TestCase):
             cli.main(["--diagnose", "--offline", "--log", str(fixture), "--since", "2026-11-02T09:00:00Z", "--until", "2026-11-02T10:00:00Z"])
         text = output.getvalue()
         self.assertIn("подтверждено сохранение", text)
-        self.assertIn('Postfix delay=2.9 с', text)
+        self.assertIn('Relay / Postfix delay', text)
+        self.assertIn('2.9 с', text)
         self.assertNotIn('"delay":',text)
         self.assertLess(text.index("подтверждено сохранение"),text.index("Источники:"))
 

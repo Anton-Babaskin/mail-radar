@@ -254,3 +254,41 @@ and remaining boundaries. The deliberately detached fake process is cleaned by
 its test: process-group termination is not a cgroup/security sandbox. A deep
 scan's deadline is checked between filesystem operations and cannot interrupt
 an individual blocked kernel syscall. Live MIAB verification remains unclaimed.
+
+## 4.1.0 task-focused reports (2026-11-04)
+
+Base: `179dc2b4e8d6aef92de4af0e2dc629ea598c980f` (merged PR #8, version 4.0.2).
+The reported menu 6/9 behavior was confirmed in that base: both routed to
+doctor; a historical Queue ID count appeared alongside the current snapshot,
+and unrelated security/backup findings displaced the selected task's facts.
+
+| Final local environment | Observed result |
+|---|---|
+| Ubuntu 22.04, stock Python 3.10.12 | **265 tests passed**, 15.480 s, no skips |
+| Python 3.9.25 with dnsutils | **265 tests passed**, 29.421 s, no skips |
+
+Ruff 0.14.10 and ShellCheck 0.8.0 passed. Containers used `--network none`,
+a read-only checkout and private executable tmpfs. The additional live-dig case
+uses the existing ephemeral loopback DNS fixture with all other host commands
+stubbed; it performs the actual --dns collector path without public queries.
+
+New regression groups: all fourteen menu choices and direct CLI/menu parity,
+selected collector dispatch/absence of unrelated commands, current queue total
+versus history and filtered matching, queue priority before retention, text
+fallback reasons, structured quota/account no-fetch behavior, successful DNS/TLS
+facts and mailbox fields in default display, inline-value safety/omission labels,
+and contextual parsing without losing pre-window correlation. Existing log,
+read-only, signal, process, installer, report and scope regressions still pass.
+Changed older display assertions now check concrete IDs/addresses/stage/delay
+and readable sections instead of the superseded short generic summary.
+
+The generator `python3 tests/render_task_examples.py` executed successfully.
+It writes anonymized previews in examples/, with fake host/Dovecot commands and
+loopback-only DNS. The example with an empty current snapshot and sixteen
+historical lifecycles is computed through the real analysis/renderer pipeline.
+Only the examples directory was writable in that generator's container.
+
+See [task report contract](task-reports.ru.md). Raw-read limits and unknown
+timestamps still imply missing evidence; skipped old grammar is explicitly
+counted as unparsed_context. There was no production MIAB execution, package
+deployment, service/configuration/queue change or public DNSBL query.

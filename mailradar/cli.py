@@ -20,12 +20,20 @@ from .runner import Runner, valid_user
 from .display import human
 from .timeutil import local_zone, timestamp
 
+LOG_MODES = {"doctor", "diagnose", "incoming", "outgoing", "delay", "queue", "flow", "greylist", "watch", "trace", "post-update"}
+HOST_MODES = {"doctor", "diagnose", "incoming", "outgoing", "delay", "queue", "dns", "account", "mailboxes", "headers", "post-update", "whitelist"}
+WORKFLOWS = {"doctor": "Общий обзор", "incoming": "Входящее письмо", "outgoing": "Исходящее письмо", "delay": "Задержка доставки",
+             "diagnose": "Расследование доставки", "queue": "Текущая очередь и SMTP-отказы", "dns": "DNS / TLS / resolver / relay",
+             "account": "Аккаунт, квота и место", "mailboxes": "Письма и папки ящика", "headers": "Выбранное письмо и заголовки",
+             "greylist": "Greylisting и повторы", "whitelist": "Whitelist SMTP-клиента", "post-update": "После обновления MIAB",
+             "watch": "Наблюдение за доставкой", "trace": "Поиск и путь письма", "flow": "История доставки"}
+
 
 def parser():
     p = argparse.ArgumentParser(prog="mail-radar", description="MailRadar " + __version__ + ": локальная диагностика доставки. Сетевые пробы включаются только --network.")
     p.add_argument("period", nargs="?", type=float, help="старый числовой период в часах (по умолчанию 24)")
     modes = p.add_mutually_exclusive_group()
-    for flag, desc in (("doctor", "общий обзор"), ("diagnose", "разобрать доставку"), ("flow", "статистика потока"), ("greylist", "greylisting и повторы"), ("whitelist", "карты Postfix и whitelist Postgrey"), ("watch", "наблюдение за новыми событиями"), ("mailboxes", "выбранный локальный ящик"), ("post-update", "состояние после обновления")):
+    for flag, desc in (("doctor", "общий обзор"), ("diagnose", "разобрать доставку"), ("incoming", "расследовать входящее письмо"), ("outgoing", "расследовать исходящее письмо"), ("delay", "задержки и причины доставки"), ("queue", "текущая очередь, адреса, причины и история отказов"), ("dns", "DNS выбранного домена, TLS и resolver своего MIAB"), ("account", "аккаунт, квота и место; нужен --user"), ("flow", "статистика потока"), ("greylist", "greylisting и повторы"), ("whitelist", "карты Postfix и whitelist Postgrey"), ("watch", "наблюдение за новыми событиями"), ("mailboxes", "выбранный локальный ящик"), ("post-update", "состояние после обновления")):
         modes.add_argument("--"+flag, action="store_const", const=flag, dest="mode", help=desc)
     modes.add_argument("--trace", metavar="VALUE", help="Message-ID, Queue ID, адрес, домен или IP (буквальное совпадение)")
     modes.add_argument("--headers", metavar="MESSAGE_ID", help="выбранные метаданные и заголовки Dovecot; нужен --user")
@@ -62,7 +70,7 @@ def parser():
 
 
 def menu(args):
-    choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "diagnose"), ("Исходящее не дошло", "diagnose"), ("Задержка письма", "diagnose"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь и SMTP-отказы", "doctor"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS/TLS/resolver/relay", "doctor"), ("Место/квота/аккаунт", "mailboxes"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch"), ("Поиск по Message-ID / Queue ID / домену", "trace"), ("Заголовки и текущая папка письма", "headers")]
+    choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "incoming"), ("Исходящее не дошло", "outgoing"), ("Задержка письма", "delay"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь сейчас и SMTP-отказы за период", "queue"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS домена / TLS и resolver своего MIAB", "dns"), ("Место/квота/аккаунт", "account"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch"), ("Поиск по Message-ID / Queue ID / домену", "trace"), ("Заголовки и текущая папка письма", "headers")]
     print("\nMailRadar " + __version__ + " — выберите задачу:")
     for number, (label, _) in enumerate(choices, 1):
         print("%2d. %s" % (number, label))
@@ -76,14 +84,14 @@ def menu(args):
         print("Введите номер от 0 до %d." % len(choices))
     args.mode = choices[int(choice)-1][1]
     args.trace = args.headers = None
-    if args.mode in ("diagnose", "watch", "greylist"):
+    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "watch", "greylist"):
         args.sender = input("Отправитель (если известен): ").strip() or None
         args.to = input("Получатель (если известен): ").strip() or None
     if args.mode == "trace":
         args.trace = input("Message-ID, Queue ID, адрес, домен или IP: ").strip()
         if not args.trace:
             raise ValueError("Для поиска нужно указать известный идентификатор или адрес")
-    if args.mode in ("mailboxes", "headers"):
+    if args.mode in ("mailboxes", "headers", "account"):
         args.user = input("Локальный адрес: ").strip()
         if not valid_user(args.user):
             raise ValueError("Нужен один корректный локальный адрес")
@@ -91,9 +99,9 @@ def menu(args):
             args.headers = input("Message-ID: ").strip()
             if not args.headers:
                 raise ValueError("Укажите Message-ID письма")
-        else:
+        elif args.mode == "mailboxes":
             args.headers = input("Message-ID (если известен, иначе поиск за период): ").strip() or None
-    if args.mode in ("diagnose", "watch", "greylist", "trace", "mailboxes", "headers"):
+    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "watch", "greylist", "trace", "mailboxes", "headers"):
         args.hours = float(input("Период в часах [24]: ").strip() or "24")
         args.timezone = input("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
         args.since = input("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
@@ -104,7 +112,9 @@ def menu(args):
         args.client_ip = input("IP SMTP-клиента (если известен): ").strip() or None
     if int(choice) == 9:
         args.domain = input("Проверяемый домен (пусто — домен сервера): ").strip() or None
-    if int(choice) == 9 or args.mode == "post-update":
+        print("DNS проверяется для выбранного домена. TLS, resolver и relay относятся к MIAB, где запущен Radar.")
+        args.network = input("Выполнить DNS-запросы и TLS-проверки? [y/N]: ").lower() in ("y", "yes", "д", "да")
+    if args.mode == "post-update":
         args.network = input("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
     return args
 
@@ -145,6 +155,8 @@ def validate(p, args):
         p.error("Для --offline нужен --log")
     if args.headers and not args.user:
         p.error("Для --headers нужен --user")
+    if args.mode == "account" and not args.user:
+        p.error("Для --account нужен один --user")
     if args.deep and not (args.user or args.to):
         p.error("Для --deep нужен --user или --to")
     return hours
@@ -234,31 +246,40 @@ def analyze(args, runner, since, until, paths):
     from .logs import analyze_logs
     from .checks import collect_checks
     from .mailstore import collect_mailstore
-    filters = {k: v for k, v in {"from": args.sender, "to": args.to, "domain": args.domain, "ip": args.ip, "trace": args.trace, "message_id": args.headers}.items() if v}
-    logs = analyze_logs(paths, since, until, timezone=args.timezone, year=args.year, filters=filters, max_bytes=args.max_bytes, max_lines=args.max_lines, recent=getattr(args,"recent_logs",False))
+    selected_recipient = args.to or (args.user if args.mode in {"mailboxes", "headers", "account"} else None)
+    filters = {k: v for k, v in {"from": args.sender, "to": selected_recipient, "domain": args.domain,
+                                "ip": args.ip or (args.client_ip if args.mode == "whitelist" else None),
+                                "client_name": args.client_name if args.mode == "whitelist" else None,
+                                "trace": args.trace, "message_id": args.headers}.items() if v}
+    logs_selected = args.mode in LOG_MODES or bool(paths) or args.journal
+    logs = analyze_logs(paths, since, until, timezone=args.timezone, year=args.year, filters=filters, max_bytes=args.max_bytes, max_lines=args.max_lines, recent=getattr(args,"recent_logs",False)) if logs_selected else dict(
+        findings=[], sources=[], traces=[], evidence=[], statistics={}, completeness=dict(complete=True, truncated=False, lines_read=0, unparsed_lines=0))
     logs["completeness"]["log_sources_complete"] = logs["completeness"]["complete"]
     logs["completeness"]["checks_complete"] = True
-    report = dict(schema_version="1.0", tool=dict(name="MailRadar", version=__version__), mode=args.mode, window=dict(since=since.isoformat(), until=until.isoformat(), timezone=args.timezone, year=args.year), filters=filters, **logs)
+    report = dict(schema_version="1.0", tool=dict(name="MailRadar", version=__version__), mode=args.mode,
+                  workflow=WORKFLOWS.get(args.mode, args.mode), scope=dict(logs_selected=logs_selected, user=args.user),
+                  window=dict(since=since.isoformat(), until=until.isoformat(), timezone=args.timezone, year=args.year), filters=filters, **logs)
     for item in report["findings"]:
         item.setdefault("window", report["window"])
         item.setdefault("check_type", "logs")
-    if not args.offline and args.mode in ("doctor", "diagnose", "post-update", "whitelist"):
+    if not args.offline and args.mode in HOST_MODES:
         host = collect_checks(runner, args)
         for item in host:
             item.setdefault("window", report["window"])
             item.setdefault("check_type", "host")
         report["findings"].extend(host)
-    if not args.offline and (args.mode in ("headers", "mailboxes") or args.mode == "diagnose" and (args.user or args.to)):
+        report["targets"] = next((item["details"] for item in host if item["id"] == "HOST.TARGETS"), {})
+    if not args.offline and (args.mode in ("headers", "mailboxes", "account") or args.mode in {"diagnose", "incoming", "delay"} and (args.user or args.to)):
         store_args = copy.copy(args)
         message_ids = {mid for trace in report.get("traces", []) for mid in trace.get("message_ids", [])}
         if not args.headers and len(message_ids) == 1:
             store_args.headers = next(iter(message_ids))
         report["findings"].extend(collect_mailstore(runner, store_args, since, until))
-    if args.offline and args.mode in ("headers", "mailboxes", "whitelist", "post-update"):
+    if args.offline and args.mode in ("headers", "mailboxes", "account", "dns", "queue", "whitelist", "post-update"):
         report["findings"].append(finding("offline.unavailable", "UNKNOWN", "Офлайн-логи не содержат текущую конфигурацию и состояние хранилища"))
     report["active_probes"] = [cmd for cmd in runner.history if cmd[0] in ("dig", "openssl", "curl")]
     report["commands"] = runner.history
-    if args.mode in ("diagnose", "trace", "headers", "mailboxes", "watch", "greylist"):
+    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "trace", "headers", "mailboxes", "watch", "greylist"):
         report["conclusions"] = conclusions(report, args.to or args.user)
     if any(f["status"] == "UNKNOWN" for f in report["findings"] + report.get("conclusions", [])):
         report["completeness"]["checks_complete"] = False
@@ -391,7 +412,7 @@ def watch(args, runner, since, until, paths, interrupted):
 
 def _run_once(args, p):
     try:
-        args.mode = "trace" if args.trace else "headers" if args.headers else args.mode or "doctor"
+        args.mode = args.mode or ("trace" if args.trace else "headers" if args.headers else "doctor")
         hours = validate(p, args)
         zone = local_zone() if args.timezone == "local" else ZoneInfo(args.timezone)
         args.timezone = getattr(zone, "key", str(zone))
@@ -415,7 +436,7 @@ def _run_once(args, p):
             raise FileExistsError("Файл отчёта уже существует: "+args.report)
         with tempfile.TemporaryDirectory(prefix="mail-radar-") as scratch:
             args.recent_logs = not args.log and not args.offline
-            paths = args.log or ([] if args.offline else default_logs())
+            paths = list(args.log) or ([] if args.offline or args.mode not in LOG_MODES else default_logs())
             labels = {}
             if "-" in paths:
                 target = Path(scratch)/"stdin.log"
