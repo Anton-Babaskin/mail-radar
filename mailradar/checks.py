@@ -25,7 +25,7 @@ from .runner import Result
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _SENSITIVE = re.compile(r"(?:sasl_passwd|password|secret|credential|private[_.-]?key|token)", re.I)
 _HOST = re.compile(r"(?=.{1,253}\Z)[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\Z")
-_QUEUE_TEXT_HEADER = re.compile(r"^([A-Za-z0-9]+)([*!#]?)\s+(\d+)\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(?:0?[1-9]|[12]\d|3[01])\s+(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\s+(.+)$", re.M)
+_QUEUE_TEXT_HEADER = re.compile(r"^([A-Za-z0-9]+)([*!]?#?)[ \t]+(\d+)[ \t]+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[ \t]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[ \t]+(?:0?[1-9]|[12]\d|3[01])[ \t]+(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d[ \t]+(.*)$")
 _PARAMS = (
     "myhostname", "mydomain", "smtpd_recipient_restrictions",
     "smtpd_relay_restrictions", "smtpd_client_restrictions",
@@ -73,6 +73,7 @@ class Context:
         self.unit_states = {}
         self.miab = False
         self.metadata = {}
+        self.local_hostname = None
         self.deadline = time.monotonic() + 90
         self.budget_exhausted = False
         self.dnsbl_controls = {}
@@ -140,7 +141,7 @@ def _assignments(text):
     return values
 
 
-def platform_checks(ctx):
+def platform_checks(ctx, metadata_only=False):
     release, error = ctx.read("/etc/os-release")
     osinfo = _assignments(release)
     metadata, _ = ctx.read("/etc/mailinabox.conf")
@@ -148,6 +149,10 @@ def platform_checks(ctx):
         ctx.miab = True
         ctx.metadata = {k: v for k, v in _assignments(metadata).items()
                         if k in {"PRIMARY_HOSTNAME", "STORAGE_ROOT", "PUBLIC_IP", "PUBLIC_IPV6"}}
+    hostname, _ = ctx.read("/etc/hostname", 1024)
+    ctx.local_hostname = clean((hostname or "").strip() or socket.gethostname())
+    if metadata_only:
+        return
     distro, version = osinfo.get("ID", "unknown"), osinfo.get("VERSION_ID", "unknown")
     supported = distro == "ubuntu" and version == "22.04" and ctx.miab
     status = "OK" if supported else "WARN" if distro in {"ubuntu", "debian"} else "UNKNOWN"
@@ -190,6 +195,7 @@ def platform_checks(ctx):
     except ValueError:
         averages = None
     host = (hostname or "").strip() or socket.gethostname()
+    ctx.local_hostname = clean(host)
     ctx.add("HOST.RUNTIME", "OK" if seconds is not None and averages else "UNKNOWN",
             "Host: {}; uptime: {}; load: {}".format(clean(host), str(round(seconds)) + "s" if seconds is not None else "unknown", clean(averages) if averages else "unknown"),
             [{"source": "/etc/hostname,/proc/uptime,/proc/loadavg", "text": "selected runtime metadata"}],
@@ -201,10 +207,13 @@ def service_checks(ctx):
     result = ctx.run(argv)
     installed = set(re.findall(r"^([A-Za-z0-9@_.-]+)\.service\s", result.stdout, re.M)) if result.ok else set()
     enable_states = dict(re.findall(r"^([A-Za-z0-9@_.-]+)\.service\s+(\S+)", result.stdout, re.M)) if result.ok else {}
-    names = ["postfix", "dovecot", "nginx", "fail2ban", "nsd", "bind9",
-             "systemd-resolved", "opendkim", "opendmarc", "postgrey", "spampd",
-             "spamassassin", "rspamd", "amavis", "mailinabox"]
-    names += sorted(n for n in installed if re.fullmatch(r"php[0-9.]+-fpm", n))[:10]
+    if getattr(ctx.args, "mode", None) in {"incoming", "outgoing", "delay", "diagnose"}:
+        names = ["postfix", "dovecot", "opendkim", "opendmarc", "postgrey", "spampd", "spamassassin", "rspamd", "amavis"]
+    else:
+        names = ["postfix", "dovecot", "nginx", "fail2ban", "nsd", "bind9",
+                 "systemd-resolved", "opendkim", "opendmarc", "postgrey", "spampd",
+                 "spamassassin", "rspamd", "amavis", "mailinabox"]
+        names += sorted(n for n in installed if re.fullmatch(r"php[0-9.]+-fpm", n))[:10]
     for name in names:
         required = name in {"postfix", "dovecot"} or (ctx.miab and name in {"nginx", "mailinabox"})
         if result.ok and name not in installed:
@@ -336,59 +345,127 @@ def queue_checks(ctx):
             rows[row["queue_id"]] = row
         except (ValueError, TypeError):
             invalid += 1
-    counts = collections.Counter(str(row.get("queue_name", "unknown")) for row in rows.values())
-    now = dt.datetime.now(dt.timezone.utc).timestamp()
-    ages = [max(0, now - row["arrival_time"]) for row in rows.values()
-            if isinstance(row.get("arrival_time"), (int, float)) and 0 < row["arrival_time"] <= now + 300]
-    incomplete = invalid or result.truncated or result.timed_out or bool(result.stderr.strip())
-    status = "UNKNOWN" if incomplete else "FAIL" if len(rows) >= 10 else "WARN" if rows else "OK"
-    details = []
-    for row in list(rows.values())[:50]:
-        recipients = row.get("recipients", [])
-        details.append({"queue_id": row["queue_id"], "queue_name": clean(row.get("queue_name", "unknown")),
-                        "sender": clean(row.get("sender", ""), 320),
-                        "arrival_time": row.get("arrival_time"),
-                        "recipients_omitted": max(0, len(recipients) - 20) if isinstance(recipients, list) else 0,
-                        "recipients": [{"address": clean(r.get("address", ""), 320),
-                                        "delay_reason": clean(r.get("delay_reason", ""), 500)}
-                                       for r in recipients[:20] if isinstance(r, dict)]
-                        if isinstance(recipients, list) else []})
-    ctx.add("QUEUE.SNAPSHOT", status,
-            "Очередь: {} видимых сообщений{}".format(len(rows), "; неполный снимок" if incomplete else ""),
-            [command_evidence(argv, result, "{} entries; {} invalid; {} duplicates".format(len(rows), invalid, duplicates))],
-            "Разберите причины deferred/hold; снимок postqueue не атомарен, remote acceptance не доказывает INBOX.",
-            count=len(rows), queues=dict(counts), oldest_age_seconds=max(ages) if ages else None,
-            snapshot_atomic=False, duplicates=duplicates, invalid_entries=invalid, entries=details,
-            entries_omitted=max(0, len(rows) - 50), complete=not bool(incomplete))
-    if ages and max(ages) > 48 * 3600:
-        ctx.add("QUEUE.AGE", "WARN", "В очереди есть письмо старше 48 часов по arrival_time showq",
-                [{"source": "postqueue -j", "text": str(int(max(ages))) + " seconds"}],
-                "Сопоставьте DSN и предыдущие попытки в trace; mtime queue file не используется.")
+    complete = not bool(invalid or result.truncated or result.timed_out or result.stderr.strip())
+    _queue_snapshot(ctx, list(rows.values()), argv, result, complete, duplicates=duplicates, invalid_entries=invalid)
 
 
 def queue_fallback(ctx):
     argv = ["postqueue", "-p"]
     result = ctx.run(argv)
-    entries = _QUEUE_TEXT_HEADER.findall(result.stdout)
+    entries, invalid, current, current_reason = [], [], None, ""
+    for line in result.stdout.splitlines():
+        match = _QUEUE_TEXT_HEADER.fullmatch(line)
+        if match:
+            queue_id, marker, size, sender = match.groups()
+            if len(size) > 18:
+                invalid.append(line)
+                current = None
+                continue
+            arrival_prefix = line[:match.start(4)].rstrip()
+            arrival = re.sub(r"^\S+[ \t]+\d+[ \t]+", "", arrival_prefix)
+            current = {"queue_id": queue_id, "queue_name": "active" if "*" in marker else "hold" if "!" in marker else "unknown",
+                       "forced_expire": "#" in marker, "message_size": int(size), "sender": sender,
+                       "arrival_time": None, "arrival_text": arrival, "recipients": [],
+                       "unknown_fields": ["arrival_year", "arrival_timezone", "arrival_time"]}
+            if current["queue_name"] == "unknown":
+                current["unknown_fields"].append("queue_name")
+            entries.append(current)
+            current_reason = ""
+            continue
+        stripped = line.strip()
+        if not stripped or re.match(r"^-+Queue ID-+", stripped) or stripped.startswith(("-- ", "Mail queue is empty")):
+            continue
+        if current is not None and stripped.startswith("(") and stripped.endswith(")"):
+            # showq_compat prints a new reason before its recipient(s), retaining
+            # it until another reason line. It does not belong to all recipients.
+            current_reason = stripped[1:-1]
+            if current_reason == "reason unavailable":
+                current_reason = ""
+            continue
+        if current is not None and line[:1].isspace() and re.fullmatch(r'(?:"(?:[^"\\\r\n]|\\.)*"|[^@\s<>()]+)@[^@\s<>()]+', stripped):
+            current["recipients"].append({"address": stripped, "delay_reason": current_reason})
+        else:
+            invalid.append(line)
     empty = "Mail queue is empty" in result.stdout
     footer = re.search(r"-- \d+(?:\.\d+)? Kbytes in (\d+) Requests?\.", result.stdout)
-    footer_count = int(footer[1]) if footer else None
-    invalid = []
-    for line in result.stdout.splitlines():
-        if not line.strip() or line[0].isspace() or line.startswith(("-Queue ID-", "(", "-- ", "Mail queue is empty")):
-            continue
-        if not _QUEUE_TEXT_HEADER.fullmatch(line):
-            invalid.append(line)
+    footer_count = int(footer[1]) if footer and len(footer[1]) <= 18 else None
     complete = bool(result.ok and not result.stderr.strip() and not invalid and not (empty and entries) and
                     ((empty and not entries and not footer_count) or footer_count == len(entries)) and not result.truncated)
-    unique = list({entry[0]: entry for entry in entries}.values())
-    status = "UNKNOWN" if not complete else "FAIL" if len(unique) >= 10 else "WARN" if unique else "OK"
-    ctx.add("QUEUE.SNAPSHOT", status, "Очередь (text fallback): {} видимых записей".format(len(unique)),
-            [command_evidence(argv, result, "{} parsed entries; empty marker={}".format(len(entries), empty))],
-            "Установите поддерживаемый postqueue -j для точных времени и причин; fallback не определяет возраст по mtime.",
-            count=len(unique), queue_ids=[e[0] for e in unique], complete=complete, snapshot_atomic=False,
-            fallback=True, footer_count=footer_count, invalid_lines=len(invalid), duplicates=len(entries) - len(unique),
-            queues=dict(collections.Counter("active" if e[1] == "*" else "hold" if e[1] == "!" else "forced_expire" if e[1] == "#" else "deferred" for e in unique)))
+    unique = list({entry["queue_id"]: entry for entry in entries}.values())
+    _queue_snapshot(ctx, unique, argv, result, complete, fallback=True, footer_count=footer_count,
+                    invalid_lines=len(invalid), duplicates=len(entries) - len(unique))
+
+
+def _queue_snapshot(ctx, rows, argv, result, complete, **extra):
+    filters = {key: value for key, value in {"sender": getattr(ctx.args, "sender", None), "to": getattr(ctx.args, "to", None), "domain": getattr(ctx.args, "domain", None)}.items() if value}
+    ignored = ["ip"] if getattr(ctx.args, "ip", None) else []
+    def matches(row):
+        sender = row.get("sender", "")
+        recipients = [recipient["address"] for recipient in row["recipients"]]
+        if filters.get("sender") and sender.casefold() != filters["sender"].casefold():
+            return False
+        if filters.get("to") and filters["to"].casefold() not in [address.casefold() for address in recipients]:
+            return False
+        if filters.get("domain") and filters["domain"].casefold().rstrip(".") not in [address.rsplit("@", 1)[-1].casefold().rstrip(".") for address in [sender] + recipients if "@" in address]:
+            return False
+        return True
+    selected = [row for row in rows if matches(row)]
+    selected.sort(key=lambda row: (0 if row.get("queue_name") in {"hold", "deferred"} or row.get("forced_expire") else 1,
+                                   row["arrival_time"] if row.get("arrival_time") is not None else float("inf"), row["queue_id"]))
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    retained = [_queue_entry(row, now) for row in selected[:50]]
+    ages = [now - row["arrival_time"] for row in selected if isinstance(row.get("arrival_time"), (int, float)) and 0 < row["arrival_time"] <= now + 300]
+    recipient_domains = collections.Counter(recipient["address"].rsplit("@", 1)[-1].casefold() for row in selected for recipient in row["recipients"] if "@" in recipient["address"])
+    uncertain_state = any(row.get("queue_name") not in {"active", "deferred", "hold", "incoming", "maildrop"} for row in selected)
+    attention = any(row.get("queue_name") in {"deferred", "hold"} or row.get("forced_expire") for row in selected)
+    status = "UNKNOWN" if not complete or uncertain_state else "WARN" if attention else "OK"
+    ctx.add("QUEUE.SNAPSHOT", status,
+            "Очередь: {} сообщений{}{}".format(len(rows), "; совпало " + str(len(selected)) if filters else "", "; неполный снимок" if not complete else ""),
+            [command_evidence(argv, result, "{} total entries; {} matched".format(len(rows), len(selected)))],
+            "Разберите причины deferred/hold; число active сообщений само по себе не является ошибкой. Снимок не атомарен и не доказывает доставку. Text fallback не восстанавливает год/timezone или неуказанный queue state.",
+            count=len(rows), matched_count=len(selected), filtered=bool(filters), filters=filters, ignored_filters=ignored,
+            queues=dict(collections.Counter(row["queue_name"] for row in rows)),
+            matched_queues=dict(collections.Counter(row["queue_name"] for row in selected)),
+            recipient_domains=dict(recipient_domains), recipient_domains_scope="matched_entries",
+            oldest_age_seconds=max(ages) if ages else None, snapshot_atomic=False,
+            entries=retained, entries_limit=50, entries_omitted=max(0, len(selected) - 50),
+            field_limits={"address": 320, "delay_reason": 1500},
+            entries_metadata_complete=all(entry["metadata_complete"] for entry in retained),
+            queue_ids=[row["queue_id"] for row in rows], complete=bool(complete), **extra)
+    if ignored:
+        ctx.add("QUEUE.FILTERS", "UNKNOWN", "SMTP source IP отсутствует в current queue snapshot; IP-фильтр не применён",
+                ignored_filters=ignored, next_step="Для IP-корреляции выберите trace по логам; адрес получателя не подставляется вместо source IP.")
+    if ages and max(ages) > 48 * 3600:
+        ctx.add("QUEUE.AGE", "WARN", "В выбранной очереди есть письмо старше 48 часов по arrival_time showq",
+                [{"source": "postqueue -j", "text": str(int(max(ages))) + " seconds"}],
+                "Сопоставьте DSN и предыдущие попытки; mtime queue file не используется.")
+
+
+def _queue_entry(row, now):
+    unknown = list(row.get("unknown_fields", []))
+    size = row.get("message_size")
+    if not isinstance(size, int) or isinstance(size, bool) or not 0 <= size <= 2 ** 63 - 1:
+        size = None
+        unknown.append("message_size")
+    arrival = row.get("arrival_time")
+    try:
+        timestamp = dt.datetime.fromtimestamp(arrival, dt.timezone.utc).isoformat() if arrival is not None else None
+    except (ValueError, OSError, OverflowError):
+        timestamp = None
+        unknown.append("arrival_iso")
+    age = max(0, now - arrival) if arrival is not None and arrival <= now + 300 else None
+    if arrival is not None and age is None:
+        unknown.append("age_seconds")
+    if len(row.get("sender", "")) > 320 or any(len(recipient["address"]) > 320 or isinstance(recipient.get("delay_reason"), str) and len(recipient["delay_reason"]) > 1500 for recipient in row["recipients"]):
+        unknown.append("field_truncation")
+    recipients = [{"address": clean(recipient["address"], 320),
+                   "delay_reason": clean(recipient["delay_reason"], 1500) if isinstance(recipient.get("delay_reason"), str) else "",
+                   "reason_known": bool(recipient.get("delay_reason")) and isinstance(recipient.get("delay_reason"), str)} for recipient in row["recipients"]]
+    return {"queue_id": row["queue_id"], "queue_name": row["queue_name"], "forced_expire": bool(row.get("forced_expire")),
+            "sender": clean(row.get("sender", ""), 320), "message_size": size, "arrival_time": arrival,
+            "arrival_iso": timestamp, "arrival_text": row.get("arrival_text"), "age_seconds": age,
+            "recipients": recipients, "recipients_total": len(recipients), "recipients_omitted": 0,
+            "unknown_fields": sorted(set(unknown)), "metadata_complete": not bool(unknown)}
 
 
 def disk_checks(ctx):
@@ -1151,7 +1228,7 @@ def _postfix_resolver_config(ctx):
     return [(path, server) for server in servers[:4]]
 
 
-def dns_checks(ctx):
+def dns_checks(ctx, config_only=False):
     resolv, error = ctx.read("/etc/resolv.conf")
     servers = _resolver_addresses(resolv)
     ctx.add("DNS.RESOLVER_CONFIG", "OK" if servers else "UNKNOWN",
@@ -1159,6 +1236,8 @@ def dns_checks(ctx):
             [{"source": "/etc/resolv.conf", "text": "nameserver=" + ",".join(servers) if servers else error or "no literal nameserver"}],
             "Recursive resolver и авторитетный NSD выполняют разные роли; active службы не доказывает разрешение.", nameservers=servers)
     postfix_resolvers = _postfix_resolver_config(ctx)
+    if config_only:
+        return
     if not getattr(ctx.args, "network", False):
         ctx.add("NETWORK.PROBES", "N/A", "Активные DNS/TLS/HTTP-пробы не выбраны", next_step="Добавьте --network для ограниченных сетевых проверок.")
         return
@@ -1539,24 +1618,65 @@ def post_update_checks(ctx):
 
 def collect_checks(runner, args):
     ctx = Context(runner, args)
-    platform_checks(ctx)
-    mode = getattr(args, "mode", "doctor")
-    if mode != "whitelist":
+    mode = getattr(args, "mode", None) or "doctor"
+    platform_checks(ctx, metadata_only=mode not in {"doctor", "post-update"})
+    if mode == "queue":
+        queue_checks(ctx)
+    elif mode == "account":
+        disk_checks(ctx)
+    elif mode == "dns":
+        contexts = postfix_checks(ctx)
+        dnsbl_filter_checks(ctx, contexts)
+        dns_checks(ctx)
+        tls_checks(ctx)
+        if getattr(args, "peer", None):
+            route_checks(ctx)
+    elif mode == "whitelist":
+        contexts = postfix_checks(ctx)
+        whitelist_checks(ctx, contexts)
+        dns_checks(ctx, config_only=True)
+    elif mode in {"incoming", "outgoing", "delay", "diagnose"}:
         service_checks(ctx)
         queue_checks(ctx)
         disk_checks(ctx)
-    contexts = postfix_checks(ctx)
-    dnsbl_filter_checks(ctx, contexts)
-    whitelist_checks(ctx, contexts)
-    dns_checks(ctx)
-    tls_checks(ctx)
-    if mode in {"doctor", "post-update"}:
+        contexts = postfix_checks(ctx)
+        whitelist_checks(ctx, contexts)
+        if getattr(args, "network", False):
+            dnsbl_filter_checks(ctx, contexts)
+            dns_checks(ctx)
+            tls_checks(ctx)
+        if getattr(args, "peer", None):
+            route_checks(ctx)
+    elif mode in {"doctor", "post-update"}:
+        service_checks(ctx)
+        queue_checks(ctx)
+        disk_checks(ctx)
+        contexts = postfix_checks(ctx)
+        dnsbl_filter_checks(ctx, contexts)
+        whitelist_checks(ctx, contexts)
+        dns_checks(ctx)
+        tls_checks(ctx)
         security_checks(ctx)
         backup_checks(ctx)
-    route_checks(ctx)
-    if mode == "post-update":
-        post_update_checks(ctx)
+        route_checks(ctx)
+        if mode == "post-update":
+            post_update_checks(ctx)
+    host_targets(ctx)
     if ctx.budget_exhausted:
         ctx.add("HOST.BUDGET", "UNKNOWN", "Достигнут общий лимит host-диагностики 90 секунд; часть действий не выполнялась",
                 next_step="Сузьте сценарий или повторите целевой раздел; неполный результат не является завершённой проверкой.", complete=False, budget_seconds=90)
     return ctx.findings
+
+
+def host_targets(ctx):
+    """Expose each target independently; an external DNS domain is not a TLS target."""
+    def hostname(value):
+        value = str(value or "").strip().rstrip(".")
+        return clean(value) if _HOST.fullmatch(value) else None
+    local = hostname(ctx.postconf.get("myhostname")) or hostname(ctx.metadata.get("PRIMARY_HOSTNAME")) or hostname(ctx.local_hostname)
+    domain = hostname(getattr(ctx.args, "domain", None)) or hostname(ctx.postconf.get("mydomain"))
+    tls = hostname(ctx.postconf.get("myhostname")) or hostname(ctx.metadata.get("PRIMARY_HOSTNAME")) or local
+    ctx.add("HOST.TARGETS", "OK" if local else "UNKNOWN", "Цели выбранной проверки",
+            [{"source": "selected metadata/postconf", "text": "local=" + str(local) + "; DNS domain=" + str(domain) + "; TLS host=" + str(tls)}],
+            "DNS-домен и локальный hostname для TLS являются разными целями; внешний TLS-сервер автоматически не сканируется.",
+            local_hostname=local, dns_domain=domain, tls_hostname=tls)

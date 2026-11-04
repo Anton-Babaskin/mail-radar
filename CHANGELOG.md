@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.1.0 — unreleased
+
+* Give queue, DNS, account, incoming, outgoing and delay tasks their own CLI/menu
+  workflows and relevant collectors; retain the full doctor/post-update audit.
+* Replace the generic terminal dump with task sections: current queue entries
+  and per-recipient causes, separate history/address/domain groups, message paths,
+  visible DNS/TLS results and targets, structured quota and mailbox metadata.
+* Apply queue filters/priority before retention, preserve text-fallback sender,
+  recipients and reasons, and avoid treating normal active volume as failure.
+* Separate known out-of-window parse failures from selected-window coverage;
+  preserve pre-window evidence and explicit read/time/access limitations.
+* Add menu-to-collector integration, renderer and scope regressions plus generated
+  anonymized previews. Output and collection limits are shown separately.
+
 ## 4.0.2 — unreleased
 
 * Explain how to update an existing checkout, preserve local changes and

@@ -41,21 +41,32 @@ def header_delays(record):
 
 
 def collect_mailstore(runner, args, since, until):
-    user = args.user or args.to
+    user = getattr(args, "user", None) or getattr(args, "to", None)
     if not user:
         return [finding("mailstore.scope", "N/A", "Поиск в хранилище требует конкретного --user или --to", next_step="Укажите локального получателя; обход всех ящиков не выполняется.")]
     result = runner.run(["doveadm", "user", "-u", user])
     if not result.ok:
-        return [finding("mailstore.user", "UNKNOWN", "Локальный аккаунт не подтверждён", evidence=[dict(returncode=result.returncode, error=result.stderr)], next_step="Проверьте адрес, права и userdb Dovecot.")]
+        return [finding("mailstore.user", "UNKNOWN", "Локальный аккаунт не подтверждён", evidence=[dict(returncode=result.returncode, error=result.stderr)], next_step="Проверьте адрес, права и userdb Dovecot.", user=user, fields={})]
     safe_userdb = {}
     for line in result.stdout.splitlines():
         parts = line.split(None, 1)
         if len(parts) == 2 and parts[0].lower() in ("uid", "gid", "home", "mail", "quota_rule"):
             safe_userdb[parts[0]] = parts[1]
-    findings = [finding("mailstore.user", "OK", "Dovecot нашёл локальный аккаунт", evidence=[dict(user=user, fields=safe_userdb)], limitation="Userdb lookup does not prove authentication is enabled or an alias is local.")]
+    findings = [finding("mailstore.user", "OK", "Dovecot нашёл локальный аккаунт", evidence=[dict(user=user, fields=safe_userdb)], user=user, fields=safe_userdb, limitation="Userdb lookup does not prove authentication is enabled or an alias is local.")]
     quota = runner.run(["doveadm", "quota", "get", "-u", user])
-    percentages = [int(m[1]) for m in re.finditer(r"\s(\d{1,4})\s*$", quota.stdout, re.M)] if quota.ok else []
-    findings.append(finding("mailstore.quota", "FAIL" if any(n >= 100 for n in percentages) else "WARN" if any(n >= 90 for n in percentages) else "OK" if percentages else "UNKNOWN", "Квота Dovecot (не размер du)", evidence=[dict(output=quota.stdout if quota.ok else quota.stderr, returncode=quota.returncode)], next_step="Если quota plugin недоступен, проверьте его конфигурацию отдельно."))
+    rows, invalid, omitted = _quota_rows(quota.stdout)
+    complete = quota.ok and not invalid and not omitted and bool(rows) and all(row["complete"] for row in rows)
+    percentages = [row["percent"] for row in rows if row["percent"] is not None and not row["unlimited"]]
+    status = "UNKNOWN" if not complete else "FAIL" if any(n >= 100 for n in percentages) else "WARN" if any(n >= 90 for n in percentages) else "OK" if percentages else "N/A"
+    findings.append(finding("mailstore.quota", status, "Квота Dovecot (не размер du)", evidence=[dict(output=quota.stdout if quota.stdout else quota.stderr, returncode=quota.returncode)],
+                            next_step="Если quota plugin недоступен, проверьте его конфигурацию отдельно.",
+                            user=user, rows=rows, rows_count=len(rows), rows_omitted=omitted, rows_limit=100,
+                            unparsed_rows=invalid, parse_complete=bool(complete), returncode=quota.returncode,
+                            truncated=bool(quota.truncated or omitted), error=quota.stderr))
+    if getattr(args, "mode", None) == "account":
+        if getattr(args, "deep", False):
+            findings.append(physical_usage(getattr(args, "root", "/"), user))
+        return findings
     # Search dates are interpreted in the server timezone by Dovecot, not the
     # administrator's selected display zone. Epoch fields refine this broad
     # candidate query to the exact UTC interval below.
@@ -64,19 +75,22 @@ def collect_mailstore(runner, args, since, until):
     local_since, local_until = since.astimezone(server_zone), until.astimezone(server_zone)
     upper_date = local_until.date() + (timedelta(days=1) if local_until.time().replace(tzinfo=None) != datetime.min.time() else timedelta())
     query = ["SINCE", local_since.date().isoformat(), "BEFORE", upper_date.isoformat()]
-    message_id = args.headers or (args.trace if args.trace and args.trace.startswith("<") else None)
+    trace = getattr(args, "trace", None)
+    message_id = getattr(args, "headers", None) or (trace if trace and trace.startswith("<") else None)
     if message_id:
         query += ["HEADER", "Message-ID", message_id]
     result = runner.run(["doveadm", "-f", "json", "fetch", "-u", user, FIELDS] + query, timeout=15)
     records = []
     omitted = 0
     uncertain_time = False
+    records_scanned = matching_records = 0
     if result.ok:
         try:
             def nonfinite(value):
                 raise ValueError("Non-finite Dovecot JSON")
             decoded = json.loads(result.stdout,parse_constant=nonfinite)
             if isinstance(decoded, list) and all(isinstance(r, dict) for r in decoded):
+                records_scanned = len(decoded)
                 for row in decoded:
                     if message_id and str(row.get("hdr.message-id","")).strip() != message_id:
                         continue  # HEADER search is substring based; require exact Message-ID
@@ -89,6 +103,7 @@ def collect_mailstore(runner, args, since, until):
                             continue
                     except (ValueError,TypeError,OverflowError):
                         uncertain_time = True
+                    matching_records += 1
                     if len(records)==50:
                         omitted += 1
                         continue
@@ -100,10 +115,35 @@ def collect_mailstore(runner, args, since, until):
             result.returncode = 65
     for record in records:
         record["header_intervals"] = header_delays(record)
-    findings.append(finding("mailstore.metadata", "UNKNOWN" if result.truncated or omitted or uncertain_time or not result.ok else "OK" if records and message_id else "WARN" if records else "UNKNOWN", "Текущая папка и даты выбранного Message-ID" if records and message_id else "Кандидаты по получателю и периоду; нужное письмо не идентифицировано" if records else "Сохранённое письмо в выбранном поиске не подтверждено", evidence=records, next_step="Сопоставьте дату, Message-ID и получателя. Текущая папка не доказывает исходную папку или причину перемещения.", returncode=result.returncode, truncated=bool(result.truncated or omitted), omitted_records=omitted, precise_time_confirmed=not uncertain_time, limitation="Epoch received dates refine the server-local date query. Missing epoch dates leave candidate timing UNKNOWN. Without Message-ID these are candidate messages only; envelope sender filters are not header From. Metadata reads may refresh indexes; flags/messages are not changed. No matches does not prove non-delivery.", error=result.stderr))
-    if args.deep:
-        findings.append(physical_usage(args.root, user))
+    findings.append(finding("mailstore.metadata", "UNKNOWN" if result.truncated or omitted or uncertain_time or not result.ok else "OK" if records and message_id else "WARN" if records else "UNKNOWN", "Текущая папка и даты выбранного Message-ID" if records and message_id else "Кандидаты по получателю и периоду; нужное письмо не идентифицировано" if records else "Сохранённое письмо в выбранном поиске не подтверждено", evidence=records, next_step="Сопоставьте дату, Message-ID и получателя. Текущая папка не доказывает исходную папку или причину перемещения.",
+                            user=user, records_count=len(records), records_scanned=records_scanned, matching_records=matching_records, record_limit=50, message_id_filter=message_id,
+                            returncode=result.returncode, truncated=bool(result.truncated or omitted), omitted_records=omitted, precise_time_confirmed=not uncertain_time, limitation="Epoch received dates refine the server-local date query. Missing epoch dates leave candidate timing UNKNOWN. Without Message-ID these are candidate messages only; envelope sender filters are not header From. Metadata reads may refresh indexes; flags/messages are not changed. No matches does not prove non-delivery.", error=result.stderr))
+    if getattr(args, "deep", False):
+        findings.append(physical_usage(getattr(args, "root", "/"), user))
     return findings
+
+
+def _quota_rows(text):
+    """Read the documented table resource columns, not arbitrary final numbers."""
+    rows, invalid, omitted = [], 0, 0
+    for line in text.splitlines():
+        if not line.strip() or re.fullmatch(r"\s*Quota name\s+Type\s+Value\s+Limit\s+%\s*", line, re.I):
+            continue
+        match = re.fullmatch(r"(.*?)\s+(STORAGE|MESSAGE)\s+(\d{1,18})\s+(\d{1,18}|-)\s+(\d{1,18}|-)\s*", line, re.I)
+        if not match:
+            invalid += 1
+            continue
+        name, resource, used, limit, percent = match.groups()
+        unlimited = limit == "-" or int(limit) == 0
+        row = dict(quota_root=name.strip(), resource=resource.upper(), used=int(used),
+                   limit=None if limit == "-" else int(limit), percent=None if percent == "-" or unlimited else int(percent),
+                   unit="KiB" if resource.upper() == "STORAGE" else "messages", unlimited=unlimited,
+                   complete=unlimited or percent != "-")
+        if len(rows) >= 100:
+            omitted += 1
+        else:
+            rows.append(row)
+    return rows, invalid, omitted
 
 
 def physical_usage(root, user, max_files=100000, seconds=5, max_dirs=10000):

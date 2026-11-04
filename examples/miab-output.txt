@@ -1,9 +1,74 @@
-
-MailRadar 4.0.2 — OK
+Обезличенный пример: системные команды подменены тестовыми ответами.
+MailRadar 4.1.0 — OK
+История доставки
 Период: 03.11 14:00 +0400 — 03.11 15:00 +0400; часовой пояс: Asia/Dubai
-Поток: очередей 2; попыток доставки 2; успешных передач 2; deferred 0; bounced 0.
+
+Письма и попытки — наблюдаемые участки пути
+  Queue ID/lifecycle из истории: показано 2 из 2.
+  ABCDEF0123 | 03.11 14:20 +0400 | принято следующим SMTP
+    Узел / instance / lifecycle: box / postfix / 1
+    Отправитель: office@local.example
+    Получатель: recipient@partner.example — принято следующим SMTP
+    Message-ID: <production-shape.1@local.example>
+    03.11 14:20 +0400 → recipient@partner.example | принято следующим SMTP
+      Relay / Postfix delay: mx.partner.example[203.0.113.7]:25 / 2.5 с
+      DSN: 2.0.0
+      Ответ / причина: 250 2.0.0 Message accepted for delivery
+      Источник: tests/fixtures/logs/miab-production-shapes.log:4
+  BCDEF01234 | 03.11 14:21 +0400 | сохранено в момент события
+    Узел / instance / lifecycle: box / postfix / 1
+    Отправитель: sender@sender.example
+    Получатель: office@local.example — сохранено в момент события
+    Message-ID: <production-shape.2@sender.example>
+    03.11 14:21 +0400 → office@local.example | сохранено в момент события
+      Relay / Postfix delay: box[private/dovecot-lmtp] / 2.9 с
+      DSN: 2.0.0
+      Ответ / причина: 250 2.0.0 <office@local.example> aBcdEFghIJklMNopQRstUV:1 Saved
+      Источник: tests/fixtures/logs/miab-production-shapes.log:9
+
+Отдельные SMTP/Dovecot события
+  03.11 14:21 +0400 | saved
+    Получатель: office@local.example
+    Message-ID: <production-shape.2@sender.example>
+    Папка: INBOX
+    Источник: tests/fixtures/logs/miab-production-shapes.log:10
+  03.11 14:22 +0400 | rejected
+    IP клиента: 192.0.2.90
+    Отправитель: spoofed@local.example
+    Получатель: target@remote.example
+    Причина: 5.7.1 <target@remote.example>: Relay access denied
+    Источник: tests/fixtures/logs/miab-production-shapes.log:12
+  События: показано 2 из 2.
+
+История доставки за выбранный период
+Наблюдаемые Queue ID/lifecycle: 2; групп сообщений: 2; попыток доставки: 2.
+Успешных передач получателю: 2; deferred: 0; bounced: 0; expired: 0; hold: 0.
 Этапы: следующий SMTP 1; внутренний SMTP 0; локальный транспорт 0. Отказов до очереди: 1.
 Saved: транспорт 1; журнал Dovecot 1 (события могут относиться к одному письму).
-Источники: 1; прочитано строк: 12; не разобрано: 0; лимит достигнут: нет.
+Отправители (число структурированных событий):
+  1 — office@local.example
+  1 — sender@sender.example
+  1 — spoofed@local.example
+Получатели (число структурированных событий):
+  2 — office@local.example
+  1 — recipient@partner.example
+  1 — target@remote.example
+Домены отправителей (по сохранённым группам адресов) (число структурированных событий):
+  2 — local.example
+  1 — sender.example
+Домены получателей (число структурированных событий):
+  1 — local.example
+  1 — partner.example
+Отправляющие аккаунты (число структурированных событий):
+  1 — office@local.example
+Причины отказов до очереди (число структурированных событий):
+  1 — 5.7.1 <target@remote.example>: Relay access denied
+
+Источники и границы вывода
+Источники: 1; прочитано строк: 12; не разобрано для отчёта: 0; вне окна: 0; лимит достигнут: нет.
+  Не разобрано для отчёта = строки в окне или с неизвестным временем; ошибки вне окна показаны отдельно.
+  Полнота чтения выбранных логов: да
+  Полнота необходимых проверок: да
 SMTP 250 подтверждает следующий hop; Saved — сохранение в момент события, а не текущую папку.
-Подробности: --details; машинный отчёт: --json; приватный файл: --report НОВЫЙ_ПУТЬ.
+Полный структурированный результат: --json; приватный файл: --report НОВЫЙ_ПУТЬ. --details расширяет timeline и
+основания.
