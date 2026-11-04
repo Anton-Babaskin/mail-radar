@@ -4,6 +4,9 @@ Reviewed 2026-11-02. These references explain decisions; they do not establish
 the installed package versions or validate a production host. Direct opens of
 some Postfix pages returned HTTP 402 in the browsing environment; their indexed
 primary-source text was retrieved through the web-search connector instead.
+On 2026-11-04 the indexed upstream postqueue reference and Dovecot 2.3 metadata
+field list below were checked again for the MVP audit. This did not execute
+Postfix/Dovecot or establish the versions installed on the owner's MIAB.
 
 * [Postfix postqueue(1)](https://www.postfix.org/postqueue.1.html): JSON Lines
   listing is available from Postfix 3.1. It supplies queue name, ID and arrival

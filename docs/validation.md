@@ -2,6 +2,53 @@
 
 This file records executed checks rather than treating configured CI as a
 successful run. Fixture tests do not validate a real mail server.
+
+## Current MVP verification — 4.1.1, 2026-11-04
+
+Baseline: merged PR #9, `7970f0910c89c30d01b43cca32f779b33cc37166`.
+The current audit and acceptance boundary are in [mvp.ru.md](mvp.ru.md).
+The sections below this one retain the historical verification record.
+
+| Environment | Final full suite | Result |
+|---|---|---|
+| Ubuntu 22.04, stock Python **3.10.12**, dnsutils | `python3 -m unittest discover -s tests` | **281 tests passed**, no skips; **23.030 s** |
+| Python **3.9.25**, dnsutils | `python -m unittest discover -s tests` | **281 tests passed**, no skips; **61.989 s** |
+
+Both disposable Docker containers ran under WSL Ubuntu with `--network none`,
+`--read-only`, a read-only checkout and a private executable `/tmp` tmpfs.
+Host commands were replaced by fake executables/runners. Real `dig` used only
+the ephemeral loopback DNS fixture. No public resolver, DNSBL or live mail
+service was contacted.
+
+Additional completed checks:
+
+* Ruff 0.14.10: `ruff check --no-cache mailradar tests` passed.
+* ShellCheck 0.8.0: all three Bash entrypoints passed. Each also passed its own
+  `bash -n`: `mail-radar`, `miab-radar`, `install.sh`.
+* The full suite includes **28 actual CLI executions** of the **14 menu
+  workflows**, once through the source launcher and once through a staged
+  installed launcher, from an unrelated working directory. Current queue
+  records, mailbox UID/folder, JSON/NDJSON termination, log scope and metadata
+  field restrictions are asserted. This is a fake-host acceptance test.
+* **13 installer tests** cover upgrades, bytecode collisions, unrelated cwd,
+  spaces, source preflight, startup isolation, symlinks and failed-install
+  preservation. Existing PTY session and signal/rotation tests remain enabled.
+* All three new redaction acceptance cases failed against the unmodified model
+  before the fix and passed after it. New contract tests cover preflight-before-
+  Runner/stdin, invalid offsets/extreme dates, expired-only sender evidence,
+  bounded suffix allocation, invalid command JSON/metadata, sensitive map paths,
+  retained mailbox conclusions and oversized watch termination.
+* `python3 tests/render_task_examples.py` regenerated the anonymized task
+  previews with fake host commands and loopback DNS, networking disabled.
+* Final `git diff --check` passed.
+
+Live MIAB validation, real service metadata formats from the owner's host,
+public DNSBL reachability, external INBOX/restore and production deployment were
+not performed. GitHub CI execution is recorded separately after completion;
+the workflow definition alone is not a passing-run claim.
+
+## Historical verification — initial 4.0.0
+
 The initial 4.0.0 checked implementation is
 `d3775f7cf3acb85779d2d04b6463a8ec8bb197e0` (code, tests, installer and CI;
 current history after the owner-author attribution correction).

@@ -198,11 +198,15 @@ def _recent_lines(stream, byte_limit, line_limit):
     omitted = start > 0
     if omitted:
         data = data.partition(b"\n")[2]  # do not parse a partial first line
-    lines = data.splitlines(keepends=True)
-    if len(lines)>line_limit:
-        lines = lines[-line_limit:]
-        omitted = True
-    return list(zip(range(-1,-len(lines)-1,-1),reversed(lines))), omitted
+    # Do not split millions of old short lines only to keep a tiny suffix.
+    # Allocation and parsing work must obey the line cap as well as byte cap.
+    lines, position = [], len(data)
+    while position > 0 and len(lines) < line_limit:
+        search_end = position - 1 if data[position-1:position] == b"\n" else position
+        begin = data.rfind(b"\n", 0, search_end) + 1
+        lines.append((-len(lines)-1, data[begin:position]))
+        position = begin
+    return lines, omitted or position > 0
 
 
 def _timestamp(line, reference, zone, year):
@@ -477,6 +481,8 @@ def _parse_event(timestamp, rest, source, line_no, text):
             event["kind"] = "removed"
         elif re.fullmatch(r", (?:status=)?expired(?:, returned to sender)?", taken[1] if taken else ", " + payload):
             event["kind"] = "expired"
+            if taken and _address(taken[0], True):
+                event["sender"] = taken[0]
     elif component == "smtpd":
         client = CLIENT.fullmatch(payload)
         if client and _ip(client[2]):

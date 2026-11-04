@@ -59,7 +59,7 @@ class StagedInstallTests(unittest.TestCase):
     def test_source_update_requires_reinstall_to_upgrade_global_copy(self):
         source = self.root / "source checkout"
         source.mkdir()
-        for name in ("install.sh", "mail-radar", "miab-radar"):
+        for name in ("install.sh", "runtime-files.txt", "mail-radar", "miab-radar"):
             shutil.copyfile(REPO / name, source / name)
         shutil.copytree(REPO / "mailradar", source / "mailradar",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -87,7 +87,7 @@ class StagedInstallTests(unittest.TestCase):
     def test_same_size_same_timestamp_upgrade_cannot_load_old_bytecode(self):
         source = self.root / "source checkout"
         source.mkdir()
-        for name in ("install.sh", "mail-radar", "miab-radar"):
+        for name in ("install.sh", "runtime-files.txt", "mail-radar", "miab-radar"):
             shutil.copyfile(REPO / name, source / name)
         shutil.copytree(REPO / "mailradar", source / "mailradar",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -171,6 +171,14 @@ class StagedInstallTests(unittest.TestCase):
         self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged")
         self.assertFalse((bindir / "miab-radar").exists())
 
+    def test_installer_python_ignores_caller_sitecustomize(self):
+        marker = self.root / "python-startup-marker"
+        (self.root / "sitecustomize.py").write_text(
+            "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n", encoding="utf-8")
+        result = self.install(env=dict(self.env, PYTHONPATH=str(self.root)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists(), "installer loaded the caller's Python startup code")
+
     def test_symlink_parent_is_rejected(self):
         self.stage.mkdir()
         external = self.root / "unrelated-dir"
@@ -194,6 +202,45 @@ class StagedInstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing", result.stderr)
         self.assertFalse(self.stage.exists())
+
+    def test_damaged_runtime_cannot_replace_a_working_install(self):
+        self.assertEqual(self.install().returncode, 0)
+        installed = self.stage / "opt/radar app/lib/mail-radar/mailradar/checks.py"
+        original = installed.read_bytes()
+        for problem in ("missing", "syntax", "undeclared"):
+            with self.subTest(problem=problem):
+                source = self.root / problem
+                source.mkdir()
+                for name in ("install.sh", "runtime-files.txt", "mail-radar", "miab-radar"):
+                    shutil.copyfile(REPO / name, source / name)
+                shutil.copytree(REPO / "mailradar", source / "mailradar", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                if problem == "missing":
+                    (source / "mailradar/checks.py").unlink()
+                elif problem == "syntax":
+                    (source / "mailradar/checks.py").write_text("def broken(\n", encoding="utf-8")
+                else:
+                    manifest = source / "runtime-files.txt"
+                    manifest.write_text(manifest.read_text().replace("mailradar/checks.py\n", ""), encoding="utf-8")
+                result = self.install(repo=source)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(installed.read_bytes(), original)
+
+    def test_only_declared_runtime_is_installed_and_broken_launcher_is_readable(self):
+        source = self.root / "declared source"
+        source.mkdir()
+        for name in ("install.sh", "runtime-files.txt", "mail-radar", "miab-radar"):
+            shutil.copyfile(REPO / name, source / name)
+        shutil.copytree(REPO / "mailradar", source / "mailradar", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        (source / "mailradar/unrelated_scratch.py").write_text("raise RuntimeError('must not be installed')", encoding="utf-8")
+        result = self.install(repo=source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        package = self.stage / "opt/radar app/lib/mail-radar/mailradar"
+        self.assertFalse((package / "unrelated_scratch.py").exists())
+        (package / "workflows.py").unlink()
+        run = subprocess.run([str(self.stage / "opt/radar app/bin/mail-radar"), "--json"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(run.returncode, 3)
+        self.assertIn('"startup_error"', run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
 
 
 if __name__ == "__main__":

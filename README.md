@@ -9,6 +9,9 @@ compatible command; no second repository or separate Mail Doctor is required.
 
 ## Быстрый старт
 
+Текущий контракт MVP и результаты проверки кода:
+[аудит 4.1.1](docs/mvp.ru.md), [14 сценариев и примеры вывода](docs/task-reports.ru.md).
+
 Целевая среда — MIAB на Ubuntu 22.04; базовая диагностика также рассчитана на
 обычные Postfix/Dovecot в Debian/Ubuntu. Нужны Bash и Python **3.9+** без pip.
 Mailcow/iRedMail не объявляются полностью поддержанными без отдельных адаптеров.
@@ -96,6 +99,12 @@ The installer locates sources relative to itself, independent of the current
 working directory. It never installs packages, downloads code or changes services.
 Existing regular MailRadar files are updated; symlink destinations are refused.
 Use a trusted checkout and installation prefix.
+
+`runtime-files.txt` declares the complete runtime. Before replacing installed
+files, the installer checks every declared file, Python syntax and internal
+imports without executing the modules. Missing or damaged sources fail before
+writes; unrelated scratch modules are not copied. This preflight does not provide
+rollback for an interrupted copy or disk failure.
 
 An isolated staged install needs no root:
 
@@ -253,6 +262,9 @@ PRs #5/#6, and [the runtime/version follow-up](docs/runtime-audit-2026-11-03.ru.
 for the distinction between an old running copy and newly reproduced defects.
 
 ## Development and evidence
+
+The current acceptance scope, confirmed fixes and remaining limits are in
+[the MVP audit](docs/mvp.ru.md). Earlier audit files record earlier baselines.
 
 ```bash
 python3 -m pip install -r requirements-dev.txt

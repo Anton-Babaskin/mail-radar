@@ -9,9 +9,9 @@ from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from .model import finding
+from .model import MAILSTORE_FIELDS, finding
 
-FIELDS = "mailbox uid guid date.received date.saved date.received.unixtime date.saved.unixtime hdr.date hdr.received hdr.message-id flags"
+FIELDS = " ".join(MAILSTORE_FIELDS)
 _FD_TRAVERSAL = os.open in os.supports_dir_fd and os.scandir in os.supports_fd and hasattr(os, "O_NOFOLLOW")
 
 
@@ -92,6 +92,14 @@ def collect_mailstore(runner, args, since, until):
             if isinstance(decoded, list) and all(isinstance(r, dict) for r in decoded):
                 records_scanned = len(decoded)
                 for row in decoded:
+                    for key, value in row.items():
+                        if key not in MAILSTORE_FIELDS or value is None:
+                            continue
+                        if key in {"flags", "hdr.received"} and isinstance(value, list) and all(isinstance(item, str) for item in value):
+                            continue
+                        allowed = (str, int, float) if key in {"uid", "date.received.unixtime", "date.saved.unixtime"} else (str,)
+                        if not isinstance(value, allowed) or isinstance(value, bool):
+                            raise ValueError("Unsupported metadata field type: " + key)
                     if message_id and str(row.get("hdr.message-id","")).strip() != message_id:
                         continue  # HEADER search is substring based; require exact Message-ID
                     stamp = row.get("date.received.unixtime")
@@ -111,7 +119,7 @@ def collect_mailstore(runner, args, since, until):
                     records.append(record)
             else:
                 raise ValueError("Unsupported Dovecot JSON shape")
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             result.returncode = 65
     for record in records:
         record["header_intervals"] = header_delays(record)

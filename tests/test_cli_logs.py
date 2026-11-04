@@ -86,7 +86,7 @@ class OfflineCliTests(unittest.TestCase):
     def test_offline_current_state_modes_do_not_claim_configuration_proven(self):
         for mode in ("--whitelist", "--post-update", "--mailboxes"):
             with self.subTest(mode=mode):
-                report = self.decoded(mode)
+                report = self.decoded(mode, LOCAL, *(["--user", "office@local.example"] if mode == "--mailboxes" else []))
                 self.assertIn("offline.unavailable", [item["id"] for item in report["findings"]])
 
     def test_offline_network_or_journal_is_cli_error(self):

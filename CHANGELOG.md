@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.1.1 — unreleased
+
+* Use one workflow catalogue for CLI/menu/source requirements; require a local
+  user for mailbox/account/header tasks and reject empty selectors or ignored
+  filters before reading sources or invoking commands.
+* Preserve trace links, conclusion references, metadata schema keys and quoted
+  addresses consistently through redaction.
+* Validate a declared runtime and internal imports before installation; isolate
+  Python preflight from caller startup code and explain incomplete installations.
+* Bound recent-line allocation, retain expired-only envelope senders, reject
+  invalid UTC offsets, and turn malformed/deep command JSON into UNKNOWN.
+* Exclude sensitive resolved whitelist indexes and handle symlink cycles; retain
+  watch stream metadata when the report hits its size limit.
+* Add executable acceptance of all 14 workflows through source and staged
+  launchers, regression probes, and a current MVP audit with explicit limits.
+
 ## 4.1.0 — unreleased
 
 * Give queue, DNS, account, incoming, outgoing and delay tasks their own CLI/menu
@@ -82,4 +98,4 @@
 
 This entry describes the working change. It is not a release or deployment
 announcement. Consult `docs/validation.md` for actually executed checks and
-`docs/code-audit.ru.md` for remaining findings and evidence limits.
+`docs/mvp.ru.md` for the current audit, acceptance scope and evidence limits.
