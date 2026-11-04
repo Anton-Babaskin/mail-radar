@@ -171,7 +171,7 @@ class MiabAuditTests(unittest.TestCase):
         self.assertEqual(code,0)
         self.assertNotIn('"returncode"',text)
         self.assertNotIn('"recognized_events"',text)
-        self.assertIn('Saved 1',text)
+        self.assertIn('Saved: транспорт 1; журнал Dovecot 1',text)
         self.assertLess(len(text.splitlines()),25)
     def test_nonfinite_runtime_metadata_is_unknown_not_an_exception(self):
         self.write('/etc/hostname','box.example\n');self.write('/proc/uptime','nan 10\n');self.write('/proc/loadavg','inf 1 2\n')
@@ -293,6 +293,17 @@ class InteractiveMenuTests(unittest.TestCase):
         self.until('DNS/TLS/HTTP-пробы? [y/N]:')
         self.send('n\n');self.until('Enter — вернуться в меню; 0 — выход:')
         self.send('0\n');self.process.wait(timeout=5)
+    def test_ctrl_c_at_menu_after_watch_restores_normal_signal_handling(self):
+        self.until('Номер [1]:');self.send('12\n')
+        self.until('Отправитель (если известен):');self.send('\n')
+        self.until('Получатель (если известен):');self.send('\n')
+        self.until('Период в часах [24]:');self.send('\n')
+        self.until('Часовой пояс [local, часовой пояс сервера]:');self.send('UTC\n')
+        self.until('Начало ISO 8601 с offset (необязательно):');self.send('\n')
+        self.until('Наблюдать секунд [180]:');self.send('0.1\n')
+        self.until('Enter — вернуться в меню; 0 — выход:')
+        self.process.send_signal(signal.SIGINT)
+        self.assertEqual(self.process.wait(timeout=5),130)
 
 
 if __name__=='__main__':

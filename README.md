@@ -49,6 +49,37 @@ bash ./mail-radar --trace sender.example --offline --log ./examples/mail.log --s
 Для общего обзора без меню используйте `--doctor`. Старые `miab-radar 48` и
 `mail-radar 48` означают обычный обзор последних 48 часов.
 
+## Обновление существующей копии
+
+Если каталог `mail-radar` уже существует, перейдите в него и обновите эту
+рабочую копию. Повторный `git clone` её не обновляет. Сначала сохраните свои
+локальные правки; если Git сообщает о конфликте или расходящейся истории,
+разберите расхождение с сохранением этих правок.
+
+```bash
+cd /путь/к/существующему/mail-radar
+git switch main
+git pull --ff-only origin main
+bash ./mail-radar --version
+sudo bash ./mail-radar --menu
+```
+
+`bash ./mail-radar` запускает исходники из этого каталога. Команда `mail-radar`
+без `./` обычно запускает отдельно установленную копию из `/usr/local/bin`.
+Обновление Git-каталога не заменяет установленный Python-пакет. Если вы
+пользуетесь глобальной командой, после обновления исходников повторите установку
+и отдельно проверьте её версию:
+
+```bash
+sudo bash ./install.sh
+mail-radar --version
+sudo mail-radar --menu
+```
+
+Сверяйте версию именно той команды, которой запускаете диагностику. `--help`
+также показывает её версию; отсутствие `--menu`/`--details` в старом help и
+большой вывод MailRadar 4.0.0 не проверяют поведение обновлённой копии.
+
 ## Installation
 
 Review the checkout, then install its own files only:
@@ -160,6 +191,11 @@ Reports contain `schema_version`, tool/mode/window/filters, sources,
 an ID, status, title, evidence, next step and details; source/time context is
 included where available. Schema version `1.0` is Radar's contract, not automatic
 FleetOps compatibility: see [the explicit mapping](docs/integrations.md).
+Delivery conclusions participate in overall status and exit severity, with
+separate `summary.conclusion_counts`; `summary.counts` remains findings-only.
+The full conclusion set is retained in JSON. Compact output prioritizes failures
+and reports how many further conclusions are available. Standalone Dovecot
+Saved evidence is shown without inventing a Postfix queue or SMTP attempt.
 
 | Status | Meaning |
 |---|---|
@@ -204,7 +240,8 @@ This changes the previous 4.0.0 behavior where every log report was UNKNOWN.
 
 See [the MIAB production-shape audit](docs/miab-audit-2026-11-03.ru.md) for
 regressions discovered after the initial release and the reviewed overlap with
-PRs #5/#6.
+PRs #5/#6, and [the runtime/version follow-up](docs/runtime-audit-2026-11-03.ru.md)
+for the distinction between an old running copy and newly reproduced defects.
 
 ## Development and evidence
 

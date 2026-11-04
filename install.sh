@@ -36,6 +36,26 @@ check_path() {
     done
 }
 
+# A timestamp-based .pyc can remain valid after an equal-size source update
+# within the same second. Only caches for modules in this installation belong
+# to this cleanup; never traverse a cache symlink or remove an unknown tree.
+declare -a BYTECODE_FILES=()
+collect_bytecode() {
+    local module_relative=$1 package_directory bytecode_dir module_name candidate
+    package_directory="$LIB_DIR/${module_relative%/*}"
+    bytecode_dir="$package_directory/__pycache__"
+    module_name=${module_relative##*/}
+    module_name=${module_name%.py}
+    check_path "$bytecode_dir"
+    [[ ! -e $bytecode_dir || -d $bytecode_dir ]] || die "bytecode cache is not a directory: $bytecode_dir"
+    for candidate in "$LIB_DIR/${module_relative}c" "$bytecode_dir/$module_name".*.pyc; do
+        [[ -e $candidate || -L $candidate ]] || continue
+        check_path "$candidate"
+        [[ -f $candidate && ! -L $candidate ]] || die "bytecode cache is not a regular file: $candidate"
+        BYTECODE_FILES+=("$candidate")
+    done
+}
+
 check_path "$BIN_DIR"
 check_path "$LIB_DIR/mailradar"
 for launcher in mail-radar miab-radar; do
@@ -48,6 +68,7 @@ while IFS= read -r -d '' source; do
     [[ ! -L $source ]] || die "refusing symlinked package source: $source"
     relative=${source#"$SCRIPT_DIR/"}
     check_path "$LIB_DIR/$relative"
+    collect_bytecode "$relative"
     MODULES+=("$relative")
 done < <(find "$SCRIPT_DIR/mailradar" -name '*.py' -print0)
 [[ ${#MODULES[@]} -gt 0 ]] || die 'Python package is empty'
@@ -60,6 +81,18 @@ for relative in "${MODULES[@]}"; do
 done
 for launcher in mail-radar miab-radar; do
     install -m 0755 -- "$SCRIPT_DIR/$launcher" "$BIN_DIR/$launcher"
+done
+
+# Re-enumerate after copying, including bytecode produced during the install.
+BYTECODE_FILES=()
+for relative in "${MODULES[@]}"; do
+    collect_bytecode "$relative"
+done
+for bytecode_file in "${BYTECODE_FILES[@]}"; do
+    check_path "$bytecode_file"
+    [[ -e $bytecode_file || -L $bytecode_file ]] || continue
+    [[ -f $bytecode_file && ! -L $bytecode_file ]] || die "bytecode cache changed during installation: $bytecode_file"
+    rm -f -- "$bytecode_file"
 done
 printf 'Installed MailRadar: %s/mail-radar\n' "$BIN_DIR"
 printf 'Compatibility command: %s/miab-radar\n' "$BIN_DIR"

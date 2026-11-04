@@ -156,6 +156,8 @@ class OfflineWatchTests(unittest.TestCase):
         self.assertTrue(any("rotation" in reason for reason in reasons))
         self.assertTrue(any("truncation" in reason for reason in reasons))
         self.assertFalse(report["completeness"]["complete"])
+        self.assertFalse(report["completeness"]["log_sources_complete"])
+        self.assertFalse(report["completeness"]["checks_complete"])
         self.assertEqual(report["statistics"]["outcomes"].get("saved"), 1)
         self.assertFalse(list(self.root.glob("mail-radar-*")), "watch scratch directories leaked")
 
@@ -185,7 +187,20 @@ class OfflineWatchTests(unittest.TestCase):
         self.assertTrue(report["watch"]["interrupted"])
         self.assertEqual(report["watch"]["reason"], "signal")
         self.assertFalse(report["completeness"]["complete"])
+        self.assertFalse(report["completeness"]["log_sources_complete"])
+        self.assertFalse(report["completeness"]["checks_complete"])
         self.assertFalse(list(self.root.glob("mail-radar-*")))
+
+    def test_watch_capture_limit_marks_truncation_in_final_report(self):
+        path = self.root / "mail.log"
+        path.write_text("")
+        process, first = self.start([path], "10", "--max-bytes", "1024")
+        path.write_text((self.stamp() + " box postfix/qmgr[1]: ABCDE: removed\n") * 50)
+        _, report = self.collect(process, first)
+        self.assertTrue(report["completeness"]["truncated"])
+        self.assertFalse(report["completeness"]["log_sources_complete"])
+        self.assertFalse(report["completeness"]["checks_complete"])
+        self.assertIn("Watch byte limit reached", report["completeness"]["limitations"])
 
 
 if __name__ == "__main__":
