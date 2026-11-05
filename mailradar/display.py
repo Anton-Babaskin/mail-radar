@@ -6,7 +6,7 @@ import textwrap
 
 from . import __version__
 from .model import clean
-from .terminal import formatted_line, presentation
+from .terminal import brand_header, formatted_line, is_terminal, panel, presentation, rule, viewport, wrap_cells
 
 
 ORDER = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "OK": 3, "N/A": 4}
@@ -45,11 +45,15 @@ def _text(value, limit=1200):
 
 def _line(value="", indent=0, role=None):
     value = _text(value, 6000)
-    prefix = " " * indent
-    lines = textwrap.wrap(value, width=118-indent, break_long_words=True, break_on_hyphens=False) or [""]
+    terminal = is_terminal()
+    width = min(118, viewport()[0]) if terminal else 118
+    indent = min(indent, max(0, width-12))
+    hanging = 2 if terminal else 0
+    lines = wrap_cells(value, max(1, width-indent-hanging)) if terminal else textwrap.wrap(value, width=width-indent, break_long_words=True, break_on_hyphens=False) or [""]
     for index, part in enumerate(lines):
         # A wrapped continuation is evidence, never a new trusted status badge.
         line_role = "plain" if index and role is None else role
+        prefix = " " * (indent + (hanging if index else 0))
         print(prefix + formatted_line(part, line_role))
 
 
@@ -59,7 +63,10 @@ def _field(label, value, indent=2):
 
 def _section(title):
     print()
-    _line(title, role="section")
+    if is_terminal():
+        print(rule(title, width=min(118, viewport()[0])))
+    else:
+        _line(title, role="section")
 
 
 def _date(value, zone="UTC"):
@@ -559,13 +566,48 @@ class ReportView:
         if self.report.get("redaction"):
             _field("Redaction", self.report["redaction"].get("limits"))
 
-    def render(self):
-        _line("MailRadar %s — %s" % (self.report.get("tool", {}).get("version", __version__), self.report.get("summary", {}).get("status", "UNKNOWN")), role="title")
-        _line(self.report.get("workflow") or MODES.get(self.mode, self.mode), role="section")
+    def dashboard_header(self):
+        version = self.report.get("tool", {}).get("version", __version__)
+        for line in brand_header(version, compact=True):
+            print(line)
+        status = self.report.get("summary", {}).get("status", "UNKNOWN")
+        labels = {"OK": "Проверка завершена", "WARN": "Требует внимания", "FAIL": "Обнаружен отказ",
+                  "UNKNOWN": "Недостаточно данных", "N/A": "Проверка неприменима"}
+        rows = [("[%s] %s" % (status, labels.get(status, "Результат проверки")), status)]
         window = self.report.get("window", {})
         if window:
-            _line("Период: %s — %s; часовой пояс: %s" % (_stamp(window.get("since"), self.zone), _stamp(window.get("until"), self.zone), self.zone))
+            rows.extend([("Период: %s — %s" % (_stamp(window.get("since"), self.zone), _stamp(window.get("until"), self.zone)), "muted"),
+                         ("Часовой пояс: " + _text(self.zone), "muted")])
+        target = self.report.get("targets", {}).get("local_hostname")
+        if target:
+            rows.append(("Узел: " + _text(target), "key"))
         if self.report.get("filters"):
+            labels = {"from": "отправитель", "to": "получатель", "domain": "домен", "ip": "IP", "client_name": "SMTP-клиент", "trace": "поиск", "message_id": "Message-ID", "user": "пользователь"}
+            rows.append(("Фильтры: " + "; ".join("%s: %s" % (labels.get(k, k), _text(v)) for k, v in self.report["filters"].items()), "key"))
+        snapshot = self.one("QUEUE.SNAPSHOT")
+        if snapshot:
+            data = snapshot.get("details", {})
+            rows.append(("Очередь СЕЙЧАС: %s%s" % (_text(data.get("count")), "; совпало: " + _text(data.get("matched_count")) if data.get("filtered") else ""), "key"))
+        stats = self.report.get("statistics", {})
+        if stats:
+            rows.append(("История: %s Queue ID/lifecycle; попыток: %s" % (_text(stats.get("queues", 0)), _text(stats.get("delivery_attempts", 0))), "key"))
+        counts = self.report.get("summary", {}).get("counts", {})
+        if counts:
+            rows.append(("Проверки: " + " · ".join("%s %s" % (name, _text(counts.get(name, 0))) for name in ("OK", "WARN", "FAIL", "UNKNOWN")), "muted"))
+        for line in panel(self.report.get("workflow") or MODES.get(self.mode, self.mode), rows,
+                          width=min(118, viewport()[0]), status=status):
+            print(line)
+
+    def render(self):
+        if is_terminal():
+            self.dashboard_header()
+        else:
+            _line("MailRadar %s — %s" % (self.report.get("tool", {}).get("version", __version__), self.report.get("summary", {}).get("status", "UNKNOWN")), role="title")
+            _line(self.report.get("workflow") or MODES.get(self.mode, self.mode), role="section")
+            window = self.report.get("window", {})
+            if window:
+                _line("Период: %s — %s; часовой пояс: %s" % (_stamp(window.get("since"), self.zone), _stamp(window.get("until"), self.zone), self.zone))
+        if self.report.get("filters") and not is_terminal():
             labels = {"from": "отправитель", "to": "получатель", "domain": "домен", "ip": "IP", "client_name": "SMTP-клиент", "trace": "поиск", "message_id": "Message-ID", "user": "пользователь"}
             _field("Фильтры истории" if self.mode == "queue" else "Фильтры", "; ".join("%s: %s" % (labels.get(k, k), _text(v)) for k, v in self.report["filters"].items()))
         self.targets()

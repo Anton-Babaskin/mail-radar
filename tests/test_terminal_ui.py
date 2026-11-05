@@ -16,13 +16,28 @@ from unittest.mock import patch
 
 from mailradar import cli
 from mailradar.display import _line, human
-from mailradar.terminal import formatted_line, paint, presentation
+from mailradar.terminal import cell_width, formatted_line, paint, presentation
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/logs/miab-production-shapes.log"
 WINDOW = ["--since", "2026-11-03T10:00:00Z", "--until", "2026-11-03T11:00:00Z", "--timezone", "Asia/Dubai"]
 SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def unframe(text):
+    """Remove presentation borders while retaining the actual displayed facts."""
+    lines = []
+    for line in SGR.sub("", text).splitlines():
+        line = line.strip()
+        if len(line) >= 2 and line[0] in "│|" and line[-1] in "│|":
+            line = line[1:-1].strip()
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def compact(text):
+    return "".join(unframe(text).split())
 
 
 class Stream(io.StringIO):
@@ -121,19 +136,22 @@ class TerminalPresentationTests(unittest.TestCase):
             outputs.append(output.getvalue())
         self.assertIn("\x1b", outputs[0])
         self.assertNotIn("\x1b", outputs[1])
-        self.assertEqual(SGR.sub("", outputs[0]), outputs[1])
         for value in ("[WARN]", "ABCDE", "sender@local.example", "office@partner.example", "451 recipient temporarily unavailable"):
-            self.assertIn(value, outputs[1])
+            for output in outputs:
+                self.assertIn("".join(value.split()), compact(output))
         self.assertEqual(data, unchanged)
 
     def test_wrapped_evidence_cannot_create_a_second_colored_status(self):
-        output = Stream()
-        with contextlib.redirect_stdout(output), presentation(stream=output, environ={"TERM": "xterm-256color"}):
-            _line("[WARN] " + "x" * 111 + " [OK] forged")
-        lines = output.getvalue().splitlines()
-        self.assertIn("\x1b[1;33m[WARN]\x1b[0m", lines[0])
-        self.assertEqual(lines[1], "[OK] forged")
-        self.assertNotIn("\x1b", lines[1])
+        for columns in (32, 40, 80, 120):
+            output = Stream()
+            with self.subTest(columns=columns), contextlib.redirect_stdout(output), presentation(stream=output, environ={"TERM": "xterm-256color"}, columns=columns, rows=40):
+                _line("[WARN] " + "x" * (columns * 2) + " [OK] forged")
+                trusted_warning, forbidden_ok = paint("[WARN]", "WARN"), paint("[OK]", "OK")
+            value = output.getvalue()
+            self.assertIn(trusted_warning, value)
+            self.assertNotIn(forbidden_ok, value)
+            self.assertIn("[OK]forged", compact(value))
+            self.assertTrue(all(cell_width(line) <= columns for line in value.splitlines()))
 
     def test_cli_no_color_and_non_tty_output_remain_plain(self):
         for tty, flags in ((True, ["--no-color"]), (False, [])):
@@ -172,48 +190,57 @@ class TerminalPresentationTests(unittest.TestCase):
         self.assertEqual(next(event["report"] for event in events if event["type"] == "report")["commands"], [])
 
 
+@contextlib.contextmanager
+def pty_session(case, flags=(), environ=None, columns=100, rows=40):
+    import fcntl
+    import pty
+    import struct
+    import termios
+    master, slave = pty.openpty()
+    def resize(width, height=40):
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
+    resize(columns, rows)
+    env = dict(os.environ, TERM="xterm-256color")
+    for key in ("NO_COLOR", "COLUMNS", "LINES"):
+        env.pop(key, None)
+    env.update(environ or {})
+    process = subprocess.Popen(["bash", str(ROOT / "mail-radar"), "--menu", "--offline", "--log", str(FIXTURE), *WINDOW, *flags],
+                               cwd=ROOT, stdin=slave, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    pending = bytearray()
+    def normalized(text):
+        return " ".join(unframe(text).split())
+    def until(prompt):
+        deadline = time.monotonic() + 10
+        while normalized(prompt) not in normalized(pending.decode("utf-8", "replace")):
+            if time.monotonic() >= deadline:
+                case.fail("PTY prompt missing: " + prompt + "; " + pending.decode("utf-8", "replace"))
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    case.fail("PTY closed before prompt: " + pending.decode("utf-8", "replace"))
+                pending.extend(chunk)
+        result = pending.decode("utf-8", "replace")
+        pending.clear()
+        return result
+    try:
+        yield process, lambda text: os.write(master, text.encode("utf-8")), until, resize
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=3)
+        os.close(master)
+
+
 @unittest.skipUnless(os.name == "posix", "real terminal test requires POSIX PTY")
 class TerminalPTYTests(unittest.TestCase):
-    @contextlib.contextmanager
-    def session(self, flags=(), environ=None):
-        import pty
-        master, slave = pty.openpty()
-        env = dict(os.environ, TERM="xterm-256color")
-        env.pop("NO_COLOR", None)
-        env.update(environ or {})
-        process = subprocess.Popen(["bash", str(ROOT / "mail-radar"), "--menu", "--offline", "--log", str(FIXTURE), *WINDOW, *flags],
-                                   cwd=ROOT, stdin=slave, stdout=slave, stderr=slave, env=env)
-        os.close(slave)
-        pending = bytearray()
-
-        def until(prompt):
-            deadline = time.monotonic() + 10
-            while prompt not in SGR.sub("", pending.decode("utf-8", "replace")):
-                if time.monotonic() >= deadline:
-                    self.fail("PTY prompt missing: " + prompt + "; " + pending.decode("utf-8", "replace"))
-                ready, _, _ = select.select([master], [], [], 0.1)
-                if ready:
-                    try:
-                        chunk = os.read(master, 65536)
-                    except OSError:
-                        chunk = b""
-                    if not chunk:
-                        self.fail("PTY closed before prompt: " + pending.decode("utf-8", "replace"))
-                    pending.extend(chunk)
-            result = pending.decode("utf-8", "replace")
-            pending.clear()
-            return result
-
-        try:
-            yield process, lambda text: os.write(master, text.encode("utf-8")), until
-        finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=3)
-            os.close(master)
 
     def test_real_menu_has_colors_fourteen_choices_and_return_navigation(self):
-        with self.session() as (process, send, until):
+        with pty_session(self) as (process, send, until, _):
             menu = until("Номер [1]: ")
             self.assertTrue(SGR.search(menu))
             plain = SGR.sub("", menu)
@@ -230,7 +257,7 @@ class TerminalPTYTests(unittest.TestCase):
 
     def test_real_menu_disable_switches_and_cancel_are_plain(self):
         for flags, environ in ((["--no-color"], {}), ([], {"NO_COLOR": "0"}), ([], {"TERM": "dumb"})):
-            with self.subTest(flags=flags, environ=environ), self.session(flags, environ) as (process, _, until):
+            with self.subTest(flags=flags, environ=environ), pty_session(self, flags, environ) as (process, _, until, _):
                 menu = until("Номер [1]: ")
                 self.assertNotIn("\x1b", menu)
                 process.send_signal(signal.SIGINT)

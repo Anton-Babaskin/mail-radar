@@ -3,6 +3,38 @@
 This file records executed checks rather than treating configured CI as a
 successful run. Fixture tests do not validate a real mail server.
 
+## Branded adaptive terminal verification — 4.2.0, 2026-11-05
+
+Baseline: main `1d9d881c48ead4b93454d1634eb3756468867970` (merged PR #10).
+The current interface contract is [terminal-ui.ru.md](terminal-ui.ru.md).
+
+| Environment | Final complete suite | Result |
+|---|---|---|
+| Ubuntu 22.04, stock Python **3.10.12** | `python3 -m unittest discover -s tests` | **301 passed**, no skips; **40.941 s** |
+| Python **3.9.25** | `python -m unittest discover -s tests` | **301 passed**, no skips; **111.607 s** |
+
+Both containers ran sequentially with no network, read-only checkout/root,
+private executable tmpfs and the existing loopback DNS fixture. Ruff,
+ShellCheck, all three Bash syntax checks and `git diff --check` passed.
+Plain-text examples were regenerated through collectors/renderer at 4.2.0.
+
+The **20 terminal tests** cover the original color contract plus responsive
+artwork, panels, facts/IDs/addresses/reasons, cell widths 32/40/80/120, combining
+and Wide glyphs, ASCII fallback and invalid/missing geometry. Real PTY tests
+exercise 32/100 columns, changing the fd size during a session, r redraw, ? help,
+all 14 choices, return and cancel. A final review found the input prompt's
+trailing space could exceed 32 columns; one cell is now reserved and the exact
+SMTP-client prompt is a regression. Wrapped evidence cannot create a colored
+status badge. Existing source/staged-launcher and diagnostic regressions remain
+in the full matrix, including TTY JSON/NDJSON without art or ANSI.
+
+Actual PTY recordings were rendered and visually inspected: 120×40 with full
+MAILRADAR wordmark/radar/menu/report, 80×24 compact menu (22 lines including the
+prompt), and 32×32 single-column menu/report. HTML content is escaped; only the
+fixed SGR palette is mapped. Preview reports use anonymized offline fixtures.
+No live MIAB, mail-service changes or external probes were used. CI results are
+recorded in the PR after actual completion.
+
 ## Terminal UI verification — 4.1.2, 2026-11-05
 
 The grouped menu/status palette and its output contract are documented in
@@ -36,7 +68,7 @@ A real color-enabled PTY session (menu → offline overview → exit) was captur
 for a standalone HTML/PNG preview. HTML-escaped text was compared with the
 ANSI-stripped capture, and the rendered preview was visually inspected.
 
-## Current MVP verification — 4.1.1, 2026-11-04
+## MVP hardening verification — 4.1.1, 2026-11-04
 
 Baseline: merged PR #9, `7970f0910c89c30d01b43cca32f779b33cc37166`.
 The current audit and acceptance boundary are in [mvp.ru.md](mvp.ru.md).

@@ -293,7 +293,7 @@ class InteractiveMenuTests(unittest.TestCase):
     def test_menu_lists_headers_trace_and_post_update_probe_choice(self):
         menu=self.until('Номер [1]:')
         self.assertIn('Заголовки',menu)
-        self.assertIn('Message-ID / Queue ID',menu)
+        self.assertIn('Поиск ID',menu)
         self.send('11\n')
         self.until('DNS/TLS/HTTP-пробы? [y/N]:')
         self.send('n\n');self.until('Enter — вернуться в меню; 0 — выход:')
