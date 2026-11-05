@@ -1,5 +1,5 @@
 Обезличенный пример: dig использует только loopback DNS; остальные команды подменены.
-MailRadar 4.1.0 — WARN
+MailRadar 4.1.2 — WARN
 DNS / TLS / resolver / relay
 Период: 03.11 14:00 +0400 — 03.11 15:00 +0400; часовой пояс: Asia/Dubai
   Фильтры: домен: example.org

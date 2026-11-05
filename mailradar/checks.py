@@ -343,7 +343,7 @@ def queue_checks(ctx):
             if row["queue_id"] in rows:
                 duplicates += 1
             rows[row["queue_id"]] = row
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             invalid += 1
     complete = not bool(invalid or result.truncated or result.timed_out or result.stderr.strip())
     _queue_snapshot(ctx, list(rows.values()), argv, result, complete, duplicates=duplicates, invalid_entries=invalid)
@@ -625,9 +625,17 @@ def whitelist_checks(ctx, contexts):
                     next_step="Проверьте backend отдельно; сетевые/regexp maps автоматически не выполняются.")
             continue
         source = ctx.path(path)
-        if _SENSITIVE.search(str(source.resolve())):
+        try:
+            index_suffix = {"hash": ".db", "btree": ".db", "lmdb": ".lmdb", "cdb": ".cdb"}.get(backend)
+            paths = [source] + ([ctx.path(path + index_suffix)] if index_suffix else [])
+            sensitive = any(_SENSITIVE.search(str(candidate.resolve())) for candidate in paths)
+        except (OSError, ValueError, RuntimeError):
             uncertain = True
-            ctx.add("WHITELIST.MAP", "UNKNOWN", "Resolved путь карты похож на credential file и исключён: " + clean(map_name))
+            ctx.add("WHITELIST.MAP", "UNKNOWN", "Путь карты/индекса не удалось безопасно разрешить: " + clean(map_name))
+            continue
+        if sensitive:
+            uncertain = True
+            ctx.add("WHITELIST.MAP", "UNKNOWN", "Resolved путь карты/индекса похож на credential file и исключён: " + clean(map_name))
             continue
         readable = False
         try:

@@ -19,24 +19,19 @@ from .model import clean, finding, finish_report, redact_report, write_private
 from .runner import Runner, valid_user
 from .display import human
 from .timeutil import local_zone, timestamp
-
-LOG_MODES = {"doctor", "diagnose", "incoming", "outgoing", "delay", "queue", "flow", "greylist", "watch", "trace", "post-update"}
-HOST_MODES = {"doctor", "diagnose", "incoming", "outgoing", "delay", "queue", "dns", "account", "mailboxes", "headers", "post-update", "whitelist"}
-WORKFLOWS = {"doctor": "Общий обзор", "incoming": "Входящее письмо", "outgoing": "Исходящее письмо", "delay": "Задержка доставки",
-             "diagnose": "Расследование доставки", "queue": "Текущая очередь и SMTP-отказы", "dns": "DNS / TLS / resolver / relay",
-             "account": "Аккаунт, квота и место", "mailboxes": "Письма и папки ящика", "headers": "Выбранное письмо и заголовки",
-             "greylist": "Greylisting и повторы", "whitelist": "Whitelist SMTP-клиента", "post-update": "После обновления MIAB",
-             "watch": "Наблюдение за доставкой", "trace": "Поиск и путь письма", "flow": "История доставки"}
+from .terminal import formatted_line, paint, presentation
+from .workflows import BY_MODE, CATALOGUE, HOST_MODES, LOG_MODES, MENU, TITLES
 
 
 def parser():
     p = argparse.ArgumentParser(prog="mail-radar", description="MailRadar " + __version__ + ": локальная диагностика доставки. Сетевые пробы включаются только --network.")
     p.add_argument("period", nargs="?", type=float, help="старый числовой период в часах (по умолчанию 24)")
     modes = p.add_mutually_exclusive_group()
-    for flag, desc in (("doctor", "общий обзор"), ("diagnose", "разобрать доставку"), ("incoming", "расследовать входящее письмо"), ("outgoing", "расследовать исходящее письмо"), ("delay", "задержки и причины доставки"), ("queue", "текущая очередь, адреса, причины и история отказов"), ("dns", "DNS выбранного домена, TLS и resolver своего MIAB"), ("account", "аккаунт, квота и место; нужен --user"), ("flow", "статистика потока"), ("greylist", "greylisting и повторы"), ("whitelist", "карты Postfix и whitelist Postgrey"), ("watch", "наблюдение за новыми событиями"), ("mailboxes", "выбранный локальный ящик"), ("post-update", "состояние после обновления")):
-        modes.add_argument("--"+flag, action="store_const", const=flag, dest="mode", help=desc)
-    modes.add_argument("--trace", metavar="VALUE", help="Message-ID, Queue ID, адрес, домен или IP (буквальное совпадение)")
-    modes.add_argument("--headers", metavar="MESSAGE_ID", help="выбранные метаданные и заголовки Dovecot; нужен --user")
+    for workflow in CATALOGUE:
+        if workflow.value_name:
+            modes.add_argument("--" + workflow.key, metavar=workflow.value_name, help=workflow.help)
+        else:
+            modes.add_argument("--" + workflow.key, action="store_const", const=workflow.key, dest="mode", help=workflow.help)
     p.add_argument("--from", dest="sender", metavar="ADDRESS")
     p.add_argument("--to", metavar="ADDRESS")
     p.add_argument("--domain")
@@ -64,58 +59,66 @@ def parser():
     p.add_argument("--redact", action="store_true", help="заменить адреса/IP/домены в экспортируемом отчёте")
     p.add_argument("--details", action="store_true", help="подробные проверки и строки доказательств")
     p.add_argument("--menu", action="store_true", help="интерактивная сессия с возвратом в меню")
-    p.add_argument("--no-color", action="store_true", help="совместимость: вывод всегда без ANSI")
+    p.add_argument("--no-color", action="store_true", help="отключить цвета меню и отчётов (также NO_COLOR/TERM=dumb)")
     p.add_argument("--version", action="version", version="MailRadar "+__version__)
     return p
 
 
 def menu(args):
-    choices = [("Общий обзор", "doctor"), ("Входящее письмо не пришло", "incoming"), ("Исходящее не дошло", "outgoing"), ("Задержка письма", "delay"), ("Письмо в Spam/Trash/другой папке", "mailboxes"), ("Очередь сейчас и SMTP-отказы за период", "queue"), ("Greylisting", "greylist"), ("Whitelist SMTP-клиента", "whitelist"), ("DNS домена / TLS и resolver своего MIAB", "dns"), ("Место/квота/аккаунт", "account"), ("После обновления MIAB", "post-update"), ("Наблюдать за доставкой", "watch"), ("Поиск по Message-ID / Queue ID / домену", "trace"), ("Заголовки и текущая папка письма", "headers")]
-    print("\nMailRadar " + __version__ + " — выберите задачу:")
+    choices = [(workflow.menu_label or workflow.title, workflow.key) for workflow in MENU]
+    def ask(prompt):
+        return input(paint(prompt, "prompt"))
+    print("\n" + paint("┌─ MailRadar " + __version__ + " ───────────────────────────────────", "title"))
+    print(paint("  Локальная диагностика почты · выберите задачу", "muted"))
+    groups = {1: "Обзор", 2: "Письма и доставка", 6: "SMTP и политика", 9: "Сервер и домены", 12: "Поиск и наблюдение"}
     for number, (label, _) in enumerate(choices, 1):
-        print("%2d. %s" % (number, label))
-    print(" 0. Выход")
+        if number in groups:
+            print("\n  " + paint(groups[number], "section"))
+        print("  " + paint("%2d." % number, "key") + " " + label)
+    print("\n  " + paint(" 0. Выход", "muted"))
+    print(paint("└──────────────────────────────────────────────────────", "muted"))
     while True:
-        choice = input("Номер [1]: ").strip().lower() or "1"
+        choice = ask("Номер [1]: ").strip().lower() or "1"
         if choice in ("0", "q", "quit", "exit", "выход"):
             return None
         if choice.isdigit() and 1 <= int(choice) <= len(choices):
             break
-        print("Введите номер от 0 до %d." % len(choices))
+        print(paint("Введите номер от 0 до %d." % len(choices), "error"))
     args.mode = choices[int(choice)-1][1]
     args.trace = args.headers = None
-    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "watch", "greylist"):
-        args.sender = input("Отправитель (если известен): ").strip() or None
-        args.to = input("Получатель (если известен): ").strip() or None
+    workflow = BY_MODE[args.mode]
+    if workflow.envelope_prompt:
+        args.sender = ask("Отправитель (если известен): ").strip() or None
+        args.to = ask("Получатель (если известен): ").strip() or None
     if args.mode == "trace":
-        args.trace = input("Message-ID, Queue ID, адрес, домен или IP: ").strip()
+        args.trace = ask("Message-ID, Queue ID, адрес, домен или IP: ").strip()
         if not args.trace:
             raise ValueError("Для поиска нужно указать известный идентификатор или адрес")
-    if args.mode in ("mailboxes", "headers", "account"):
-        args.user = input("Локальный адрес: ").strip()
+    if workflow.requires_user:
+        args.user = ask("Локальный адрес: ").strip()
         if not valid_user(args.user):
             raise ValueError("Нужен один корректный локальный адрес")
         if args.mode == "headers":
-            args.headers = input("Message-ID: ").strip()
+            args.headers = ask("Message-ID: ").strip()
             if not args.headers:
                 raise ValueError("Укажите Message-ID письма")
         elif args.mode == "mailboxes":
-            args.headers = input("Message-ID (если известен, иначе поиск за период): ").strip() or None
-    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "watch", "greylist", "trace", "mailboxes", "headers"):
-        args.hours = float(input("Период в часах [24]: ").strip() or "24")
-        args.timezone = input("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
-        args.since = input("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
+            args.headers = ask("Message-ID (если известен, иначе поиск за период): ").strip() or None
+    if workflow.period_prompt:
+        args.hours = float(ask("Период в часах [24]: ").strip() or "24")
+        args.timezone = ask("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
+        args.since = ask("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
     if args.mode == "watch":
-        args.seconds = float(input("Наблюдать секунд [180]: ").strip() or "180")
+        args.seconds = float(ask("Наблюдать секунд [180]: ").strip() or "180")
     if args.mode == "whitelist":
-        args.client_name = input("Имя SMTP-клиента (если известно): ").strip() or None
-        args.client_ip = input("IP SMTP-клиента (если известен): ").strip() or None
+        args.client_name = ask("Имя SMTP-клиента (если известно): ").strip() or None
+        args.client_ip = ask("IP SMTP-клиента (если известен): ").strip() or None
     if int(choice) == 9:
-        args.domain = input("Проверяемый домен (пусто — домен сервера): ").strip() or None
-        print("DNS проверяется для выбранного домена. TLS, resolver и relay относятся к MIAB, где запущен Radar.")
-        args.network = input("Выполнить DNS-запросы и TLS-проверки? [y/N]: ").lower() in ("y", "yes", "д", "да")
+        args.domain = ask("Проверяемый домен (пусто — домен сервера): ").strip() or None
+        print(paint("DNS проверяется для выбранного домена. TLS, resolver и relay относятся к MIAB, где запущен Radar.", "muted"))
+        args.network = ask("Выполнить DNS-запросы и TLS-проверки? [y/N]: ").lower() in ("y", "yes", "д", "да")
     if args.mode == "post-update":
-        args.network = input("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
+        args.network = ask("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
     return args
 
 def validate(p, args):
@@ -142,7 +145,7 @@ def validate(p, args):
             p.error("Некорректный IP: --"+field.replace("_", "-"))
     for field in ("trace", "headers"):
         value = getattr(args, field)
-        if value and (len(value) > 998 or any(ord(c) < 32 for c in value) or value.startswith("-")):
+        if value is not None and (not value.strip() or len(value) > 998 or any(ord(c) < 32 for c in value) or value.startswith("-")):
             p.error("Недопустимое значение --"+field)
     if not 0 < args.seconds <= 3600 or not 1024 <= args.max_bytes <= 128*1024*1024 or not 1 <= args.max_lines <= 500000:
         p.error("Недопустимый лимит/длительность")
@@ -153,12 +156,31 @@ def validate(p, args):
         p.error("--offline запрещает --network и --journal")
     if args.offline and not args.log:
         p.error("Для --offline нужен --log")
-    if args.headers and not args.user:
-        p.error("Для --headers нужен --user")
-    if args.mode == "account" and not args.user:
-        p.error("Для --account нужен один --user")
+    workflow = BY_MODE[args.mode]
+    logs_selected = workflow.logs or bool(args.log) or args.journal
+    if not logs_selected:
+        if args.sender or args.to and not workflow.store:
+            p.error("--from/--to фильтруют историю писем; добавьте --log или выберите задачу доставки")
+        if (args.domain or args.ip) and args.mode != "dns":
+            p.error("--domain/--ip нужны для истории или DNS; SMTP-клиент whitelist задаётся --client-name/--client-ip")
+    if (args.client_name or args.client_ip) and args.mode not in {"doctor", "post-update", "incoming", "outgoing", "delay", "diagnose", "whitelist"}:
+        p.error("--client-name/--client-ip нужны для whitelist-проверок; для поиска в истории используйте --trace или --ip")
+    if args.peer and args.mode not in {"doctor", "post-update", "incoming", "outgoing", "delay", "diagnose", "dns"}:
+        p.error("--peer применим к обзору, расследованию доставки или DNS/route")
+    if workflow.requires_user and not args.user:
+        p.error("Для --" + args.mode + " нужен один --user")
+    if workflow.requires_user and args.to and args.to.casefold() != args.user.casefold():
+        p.error("--to и --user должны указывать один локальный ящик")
+    if workflow.requires_user and not (args.log or args.journal) and any((args.sender, args.domain, args.ip, args.client_name, args.client_ip)):
+        p.error("Фильтры адресов/домена/IP применяются к логам; для метаданных выберите --user, Message-ID и период, либо добавьте --log")
+    if args.mode == "watch" and (args.journal or "-" in args.log or any(path.endswith((".gz", ".bz2", ".xz", ".lzma")) for path in args.log)):
+        p.error("Watch читает обычные файлы; укажите --log /var/log/mail.log")
     if args.deep and not (args.user or args.to):
         p.error("Для --deep нужен --user или --to")
+    if args.deep and not workflow.store:
+        p.error("--deep применим только к выбранному локальному ящику в mailbox/account/diagnosis задачах")
+    if args.user and not workflow.store:
+        p.error("--user применим к mailbox/account/headers/diagnosis задачам; для отправителя используйте --from")
     return hours
 
 
@@ -257,7 +279,7 @@ def analyze(args, runner, since, until, paths):
     logs["completeness"]["log_sources_complete"] = logs["completeness"]["complete"]
     logs["completeness"]["checks_complete"] = True
     report = dict(schema_version="1.0", tool=dict(name="MailRadar", version=__version__), mode=args.mode,
-                  workflow=WORKFLOWS.get(args.mode, args.mode), scope=dict(logs_selected=logs_selected, user=args.user),
+                  workflow=TITLES.get(args.mode, args.mode), scope=dict(logs_selected=logs_selected, user=args.user),
                   window=dict(since=since.isoformat(), until=until.isoformat(), timezone=args.timezone, year=args.year), filters=filters, **logs)
     for item in report["findings"]:
         item.setdefault("window", report["window"])
@@ -269,7 +291,8 @@ def analyze(args, runner, since, until, paths):
             item.setdefault("check_type", "host")
         report["findings"].extend(host)
         report["targets"] = next((item["details"] for item in host if item["id"] == "HOST.TARGETS"), {})
-    if not args.offline and (args.mode in ("headers", "mailboxes", "account") or args.mode in {"diagnose", "incoming", "delay"} and (args.user or args.to)):
+    workflow = BY_MODE[args.mode]
+    if not args.offline and (workflow.store == "user" or workflow.store == "recipient" and (args.user or args.to)):
         store_args = copy.copy(args)
         message_ids = {mid for trace in report.get("traces", []) for mid in trace.get("message_ids", [])}
         if not args.headers and len(message_ids) == 1:
@@ -279,7 +302,7 @@ def analyze(args, runner, since, until, paths):
         report["findings"].append(finding("offline.unavailable", "UNKNOWN", "Офлайн-логи не содержат текущую конфигурацию и состояние хранилища"))
     report["active_probes"] = [cmd for cmd in runner.history if cmd[0] in ("dig", "openssl", "curl")]
     report["commands"] = runner.history
-    if args.mode in ("diagnose", "incoming", "outgoing", "delay", "trace", "headers", "mailboxes", "watch", "greylist"):
+    if workflow.conclusions:
         report["conclusions"] = conclusions(report, args.to or args.user)
     if any(f["status"] == "UNKNOWN" for f in report["findings"] + report.get("conclusions", [])):
         report["completeness"]["checks_complete"] = False
@@ -301,8 +324,27 @@ def watch(args, runner, since, until, paths, interrupted):
         payload = dict(type=kind, time=datetime.now(timezone.utc).isoformat(), **values)
         if args.json:
             print(json.dumps(payload, ensure_ascii=False), flush=True)
+        elif kind == "watch_started":
+            print(paint("Наблюдение начато · %g с · Ctrl+C — завершить" % values["seconds"], "section"), flush=True)
+            print(paint("Ротация и усечение могут оставлять пробелы; они будут указаны в итоговом отчёте.", "muted"), flush=True)
+        elif kind == "watch_progress":
+            print(paint("Прочитано байт: %d · найдено Queue ID/lifecycle: %d" % (values["bytes_observed"], values["matched_queues"]), "key"), flush=True)
+            for item in values.get("findings", []):
+                print(formatted_line("[%s] %s" % (item["status"], clean(item["title"]))), flush=True)
+        elif kind == "source_gap":
+            reasons = {
+                "Watch source missing, unreadable or not a regular file at start": "Файл отсутствует, недоступен или не является обычным файлом при старте",
+                "Watch source missing/unreadable during observation": "Источник недоступен во время наблюдения",
+                "Observed source truncation: possible gap": "Файл усечён; возможен пропуск событий",
+                "Watch line length limit: partial line discarded": "Достигнут предел длины строки; неполная строка пропущена",
+                "Partial line at rotation discarded": "Неполная строка при ротации пропущена",
+                "Observed rotation: possible race/gap": "Обнаружена ротация; возможен пропуск событий",
+                "Watch byte limit reached": "Достигнут лимит чтения байтов",
+                "Trailing partial line discarded": "Незавершённая последняя строка пропущена",
+            }
+            print(formatted_line("[UNKNOWN] " + reasons.get(values["reason"], clean(values["reason"]))), flush=True)
         else:
-            print(clean(kind+": "+json.dumps(values, ensure_ascii=False)), flush=True)
+            print(formatted_line(kind + ": " + json.dumps(values, ensure_ascii=False)), flush=True)
     def gap(reason, truncated=False):
         nonlocal capture_truncated
         capture_truncated = capture_truncated or truncated
@@ -412,7 +454,7 @@ def watch(args, runner, since, until, paths, interrupted):
 
 def _run_once(args, p):
     try:
-        args.mode = args.mode or ("trace" if args.trace else "headers" if args.headers else "doctor")
+        args.mode = args.mode or ("trace" if args.trace is not None else "headers" if args.headers is not None else "doctor")
         hours = validate(p, args)
         zone = local_zone() if args.timezone == "local" else ZoneInfo(args.timezone)
         args.timezone = getattr(zone, "key", str(zone))
@@ -420,7 +462,7 @@ def _run_once(args, p):
         since = timestamp(args.since, zone) if args.since else until-timedelta(hours=hours)
         if since >= until:
             p.error("--since должен предшествовать --until")
-    except (ValueError, ZoneInfoNotFoundError) as error:
+    except (ValueError, ZoneInfoNotFoundError, OverflowError) as error:
         p.error(str(error))
     runner, interrupted = Runner(network=args.network, offline=args.offline), [False]
     def stop(signum, frame):
@@ -459,8 +501,6 @@ def _run_once(args, p):
                 paths.append(str(path))
                 labels[str(path)] = "journal:postfix,dovecot,postgrey"
             if args.mode == "watch":
-                if args.journal or "-" in args.log or any(path.endswith((".gz", ".bz2", ".xz")) for path in paths):
-                    p.error("Watch читает обычные файлы; укажите --log /var/log/mail.log")
                 paths = args.log or ["/var/log/mail.log"]
                 report = watch(args, runner, since, until, paths, interrupted)
             else:
@@ -483,7 +523,7 @@ def _run_once(args, p):
             elif args.json:
                 print(json.dumps(report,ensure_ascii=False))
             else:
-                human(report,details=args.details)
+                human(report,details=args.details,no_color=args.no_color)
                 if args.report:
                     print("Приватный отчёт сохранён: "+clean(args.report))
             return 130 if interrupted[0] else report["summary"]["exit_code"]
@@ -494,7 +534,7 @@ def _run_once(args, p):
         else:
             print("Диагностика прервана; результат неполный.", file=sys.stderr)
         return 130
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, OverflowError) as error:
         message = dict(type="error", error=clean(error), complete=False)
         print(json.dumps(message, ensure_ascii=False) if args.json else "Ошибка: "+clean(error), file=sys.stderr)
         return 3
@@ -517,8 +557,15 @@ def main(argv=None):
         p.error("--menu требует интерактивный терминал; для автоматизации используйте CLI-флаги")
     if interactive and args.json:
         p.error("--menu и --json несовместимы")
-    if not interactive:
-        return _run_once(args, p)
+    if interactive and "-" in args.log:
+        p.error("--menu и --log - используют один stdin; укажите файл логов")
+    with presentation(no_color=args.no_color or args.json):
+        if not interactive:
+            return _run_once(args, p)
+        return _session(args, p)
+
+
+def _session(args, p):
     last_code = 0
     def menu_error(message):
         raise ValueError(message)
@@ -529,21 +576,22 @@ def main(argv=None):
                 selected = menu(copy.deepcopy(args))
                 if selected is None:
                     return last_code
+                print("\n" + paint("Проверка: " + TITLES[selected.mode], "section"))
                 last_code = _run_once(selected, p)
             except (ValueError, ZoneInfoNotFoundError) as error:
-                print("Ошибка ввода: " + clean(error))
+                print(paint("Ошибка ввода: " + clean(error), "error"))
             except SystemExit as error:
                 if error.code not in (2,3):
                     raise
                 last_code = error.code
-            again = input("\nEnter — вернуться в меню; 0 — выход: ").strip().lower()
+            again = input("\n" + paint("Enter — вернуться в меню; 0 — выход: ", "prompt")).strip().lower()
             if again in ("0","q","quit","exit","выход"):
                 return last_code
             args.report = None  # an explicit create-once report path applies to the first run
     except EOFError:
         return last_code
     except KeyboardInterrupt:
-        print("\nСессия завершена.")
+        print("\n" + paint("Сессия завершена.", "muted"))
         return 130
 
 

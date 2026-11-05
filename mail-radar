@@ -6,4 +6,18 @@ if [[ -d "$SCRIPT_DIR/mailradar" ]]; then
 else
     MODULE_DIR="$SCRIPT_DIR/../lib/mail-radar"
 fi
-exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from mailradar.cli import main; sys.exit(main(sys.argv[2:]))' "$MODULE_DIR" "$@"
+exec python3 -I -c '
+import json
+import sys
+if sys.version_info < (3, 9):
+    print("MailRadar requires Python 3.9 or newer", file=sys.stderr)
+    sys.exit(3)
+sys.path.insert(0, sys.argv[1])
+try:
+    from mailradar.cli import main
+    sys.exit(main(sys.argv[2:]))
+except (ImportError, SyntaxError):
+    message = "Неполная или повреждённая установка MailRadar. Обновите checkout и повторите install.sh из полной проверенной копии."
+    print(json.dumps(dict(type="startup_error", error=message, complete=False), ensure_ascii=False) if "--json" in sys.argv[2:] else message, file=sys.stderr)
+    sys.exit(3)
+' "$MODULE_DIR" "$@"

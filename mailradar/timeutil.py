@@ -19,6 +19,9 @@ def local_zone():
 
 
 def timestamp(value, zone):
+    offset = re.search(r"[+-](\d{2})(?::?(\d{2}))?(?::?(\d{2})(?:\.\d+)?)?$", value)
+    if offset and (int(offset[1]) > 23 or int(offset[2] or 0) > 59 or int(offset[3] or 0) > 59):
+        raise ValueError("Некорректный UTC offset")
     normalized = re.sub(r"([+-]\d{2})(\d{2})$",r"\1:\2",value.replace("Z", "+00:00"))
     normalized = re.sub(r"(\.\d{6})\d+",r"\1",normalized)
     result = datetime.fromisoformat(normalized)

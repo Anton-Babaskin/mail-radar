@@ -8,6 +8,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+from .model import MAILSTORE_FIELDS
+
 
 @dataclass
 class Result:
@@ -115,7 +117,7 @@ def permitted(argv):
         if args[:3] == ["quota", "get", "-u"]:
             return len(args) == 4 and valid_user(args[3])
         if args[:4] == ["-f", "json", "fetch", "-u"] and len(args) >= 9 and valid_user(args[4]):
-            if not set(args[5].split()) <= {"mailbox", "uid", "guid", "date.received", "date.saved", "date.received.unixtime", "date.saved.unixtime", "hdr.date", "hdr.received", "hdr.message-id", "flags"}:
+            if not set(args[5].split()) <= set(MAILSTORE_FIELDS):
                 return False
             rest, i = args[6:], 0
             while i < len(rest):

@@ -9,6 +9,9 @@ compatible command; no second repository or separate Mail Doctor is required.
 
 ## Быстрый старт
 
+Текущий контракт MVP и результаты проверки кода:
+[аудит 4.1.1](docs/mvp.ru.md), [14 сценариев и примеры вывода](docs/task-reports.ru.md).
+
 Целевая среда — MIAB на Ubuntu 22.04; базовая диагностика также рассчитана на
 обычные Postfix/Dovecot в Debian/Ubuntu. Нужны Bash и Python **3.9+** без pip.
 Mailcow/iRedMail не объявляются полностью поддержанными без отдельных адаптеров.
@@ -29,6 +32,13 @@ sudo bash ./mail-radar
 частичная диагностика; недоступные проверки отмечаются UNKNOWN. Обычный
 терминальный отчёт краткий; `--details` раскрывает проверки и строки
 доказательств, `--json` сохраняет машинный контракт без меню.
+
+В терминале меню сгруппировано по задачам, разделы и ключевые поля выделены
+цветом: OK — зелёный, WARN — жёлтый, FAIL — красный, UNKNOWN — синий.
+Статус всегда подписан текстом. `--no-color`, непустой `NO_COLOR` или `TERM=dumb`
+отключают оформление; перенаправление в файл/pipe и JSON/NDJSON не содержат ANSI.
+Новые библиотеки или настройка терминала не нужны.
+Контракт цветов и терминальных проверок: [terminal-ui.ru.md](docs/terminal-ui.ru.md).
 
 Четыре обычных сценария администратора:
 
@@ -96,6 +106,12 @@ The installer locates sources relative to itself, independent of the current
 working directory. It never installs packages, downloads code or changes services.
 Existing regular MailRadar files are updated; symlink destinations are refused.
 Use a trusted checkout and installation prefix.
+
+`runtime-files.txt` declares the complete runtime. Before replacing installed
+files, the installer checks every declared file, Python syntax and internal
+imports without executing the modules. Missing or damaged sources fail before
+writes; unrelated scratch modules are not copied. This preflight does not provide
+rollback for an interrupted copy or disk failure.
 
 An isolated staged install needs no root:
 
@@ -190,8 +206,10 @@ or listed result; IP reputation and domain reputation are separate.
 
 ## Findings, JSON and exit codes
 
-Human output is Russian, with technical evidence preserved. It is always free
-of ANSI controls; `--no-color` is accepted. JSON keys and finding IDs do not
+Human output is Russian, with technical evidence preserved. Terminal output
+uses a small status palette; `--no-color`, nonempty `NO_COLOR` or `TERM=dumb`
+disable it. Redirected output and JSON/NDJSON contain no ANSI controls.
+Color is added only after sanitizing and wrapping untrusted data. JSON keys and finding IDs do not
 change with human language. `--json` writes one JSON document; watch writes one
 valid JSON object per NDJSON line, including start/end/service events.
 
@@ -253,6 +271,9 @@ PRs #5/#6, and [the runtime/version follow-up](docs/runtime-audit-2026-11-03.ru.
 for the distinction between an old running copy and newly reproduced defects.
 
 ## Development and evidence
+
+The current acceptance scope, confirmed fixes and remaining limits are in
+[the MVP audit](docs/mvp.ru.md). Earlier audit files record earlier baselines.
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
