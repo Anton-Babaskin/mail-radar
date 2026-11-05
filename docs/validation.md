@@ -3,6 +3,39 @@
 This file records executed checks rather than treating configured CI as a
 successful run. Fixture tests do not validate a real mail server.
 
+## Terminal UI verification — 4.1.2, 2026-11-05
+
+The grouped menu/status palette and its output contract are documented in
+[terminal-ui.ru.md](terminal-ui.ru.md). Diagnostic MVP findings below remain
+applicable; the terminal changes do not change schema or collection scope.
+
+| Environment | Final complete suite | Result |
+|---|---|---|
+| Ubuntu 22.04, stock Python **3.10.12** | `python3 -m unittest discover -s tests` | **292 passed**, no skips; **45.713 s** |
+| Python **3.9.25** | `python -m unittest discover -s tests` | **292 passed**, no skips; **119.712 s** |
+
+Both final runs used the existing isolated images, disabled networking,
+read-only checkout/root filesystem, private executable tmpfs and loopback DNS.
+They ran sequentially. Ruff and ShellCheck passed; generated plain-text examples
+were updated to 4.1.2. No production MIAB/service or public network probe ran.
+
+The **11 new terminal tests** verify the real PTY menu, all 14 choices and return
+navigation, cancel, TTY/env/--no-color precedence, text equivalence and immutable
+data, fixed SGR-only output, cleanup after exceptions, hostile terminal controls,
+wrapped evidence and uncolored TTY JSON/NDJSON. An independent review found a
+forged `[OK]` on a wrapped continuation receiving green styling; continuations
+now stay plain and the exact probe is a regression.
+
+One earlier concurrent Ubuntu run timed out waiting five seconds for Ctrl+C
+after an invalid menu choice. The isolated 25-case MIAB suite, **20 repetitions**
+of that exact PTY cancellation case (4.806 s total), and both final complete
+runs passed without increasing its timeout. The cause of the isolated timeout
+was not established; it is retained here rather than counting that run as a pass.
+
+A real color-enabled PTY session (menu → offline overview → exit) was captured
+for a standalone HTML/PNG preview. HTML-escaped text was compared with the
+ANSI-stripped capture, and the rendered preview was visually inspected.
+
 ## Current MVP verification — 4.1.1, 2026-11-04
 
 Baseline: merged PR #9, `7970f0910c89c30d01b43cca32f779b33cc37166`.

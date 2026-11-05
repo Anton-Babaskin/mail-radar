@@ -6,6 +6,7 @@ import textwrap
 
 from . import __version__
 from .model import clean
+from .terminal import formatted_line, presentation
 
 
 ORDER = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "OK": 3, "N/A": 4}
@@ -42,21 +43,23 @@ def _text(value, limit=1200):
     return " ".join(clean(value, limit).split())
 
 
-def _line(value="", indent=0):
+def _line(value="", indent=0, role=None):
     value = _text(value, 6000)
     prefix = " " * indent
     lines = textwrap.wrap(value, width=118-indent, break_long_words=True, break_on_hyphens=False) or [""]
-    for part in lines:
-        print(prefix + part)
+    for index, part in enumerate(lines):
+        # A wrapped continuation is evidence, never a new trusted status badge.
+        line_role = "plain" if index and role is None else role
+        print(prefix + formatted_line(part, line_role))
 
 
 def _field(label, value, indent=2):
-    _line(label + ": " + _text(value), indent)
+    _line(label + ": " + _text(value), indent, role="field")
 
 
 def _section(title):
     print()
-    _line(title)
+    _line(title, role="section")
 
 
 def _date(value, zone="UTC"):
@@ -258,7 +261,7 @@ class ReportView:
         for entry in selected:
             state = entry.get("queue_name", "состояние неизвестно")
             meaning = {"deferred": "временно отложено", "hold": "удерживается", "active": "отправляется", "incoming": "обрабатывается", "maildrop": "поступает"}.get(state)
-            _line("%s | %s%s" % (entry.get("queue_id", "ID неизвестен"), state, " — " + meaning if meaning else ""), 2)
+            _line("%s | %s%s" % (entry.get("queue_id", "ID неизвестен"), state, " — " + meaning if meaning else ""), 2, role="key")
             age = entry.get("age_seconds")
             if age is None and isinstance(entry.get("arrival_time"), (int, float)):
                 try:
@@ -362,7 +365,7 @@ class ReportView:
             active = [event for event in events if event.get("in_window", True)]
             first, last = (active[0], active[-1]) if active else (events[0], events[-1]) if events else ({}, {})
             outcome = trace.get("outcome", "unknown")
-            _line("%s | %s | %s" % (trace.get("queue_id", "ID неизвестен"), _stamp(first.get("time"), self.zone), OUTCOMES.get(outcome, outcome)), 2)
+            _line("%s | %s | %s" % (trace.get("queue_id", "ID неизвестен"), _stamp(first.get("time"), self.zone), OUTCOMES.get(outcome, outcome)), 2, role="key")
             _field("Узел / instance / lifecycle", "%s / %s / %s" % (trace.get("host", "?"), trace.get("instance", "?"), trace.get("generation", "?")), 4)
             _field("Отправитель", ["<> (bounce sender)" if value == "" else value for value in trace.get("senders", [])] or "не установлен", 4)
             recipients = trace.get("recipients", [])
@@ -478,7 +481,7 @@ class ReportView:
                 for record in selected:
                     if not isinstance(record, dict):
                         continue
-                    _line("%s | UID %s | flags: %s" % (_text(record.get("mailbox")), _text(record.get("uid")), _text(record.get("flags", "неизвестно"))), 2)
+                    _line("%s | UID %s | flags: %s" % (_text(record.get("mailbox")), _text(record.get("uid")), _text(record.get("flags", "неизвестно"))), 2, role="key")
                     _field("Получено / сохранено", "%s / %s" % (_text(record.get("date.received")), _text(record.get("date.saved"))), 4)
                     _field("Message-ID", record.get("hdr.message-id"), 4)
                     if self.mode == "headers" or self.details:
@@ -557,8 +560,8 @@ class ReportView:
             _field("Redaction", self.report["redaction"].get("limits"))
 
     def render(self):
-        _line("MailRadar %s — %s" % (self.report.get("tool", {}).get("version", __version__), self.report.get("summary", {}).get("status", "UNKNOWN")))
-        _line(self.report.get("workflow") or MODES.get(self.mode, self.mode))
+        _line("MailRadar %s — %s" % (self.report.get("tool", {}).get("version", __version__), self.report.get("summary", {}).get("status", "UNKNOWN")), role="title")
+        _line(self.report.get("workflow") or MODES.get(self.mode, self.mode), role="section")
         window = self.report.get("window", {})
         if window:
             _line("Период: %s — %s; часовой пояс: %s" % (_stamp(window.get("since"), self.zone), _stamp(window.get("until"), self.zone), self.zone))
@@ -614,5 +617,6 @@ class ReportView:
         self.coverage()
 
 
-def human(report, details=False):
-    ReportView(report, details).render()
+def human(report, details=False, no_color=False):
+    with presentation(no_color=no_color):
+        ReportView(report, details).render()

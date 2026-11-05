@@ -9,4 +9,5 @@ mailradar/mailstore.py
 mailradar/model.py
 mailradar/runner.py
 mailradar/timeutil.py
+mailradar/terminal.py
 mailradar/workflows.py

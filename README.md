@@ -33,6 +33,13 @@ sudo bash ./mail-radar
 терминальный отчёт краткий; `--details` раскрывает проверки и строки
 доказательств, `--json` сохраняет машинный контракт без меню.
 
+В терминале меню сгруппировано по задачам, разделы и ключевые поля выделены
+цветом: OK — зелёный, WARN — жёлтый, FAIL — красный, UNKNOWN — синий.
+Статус всегда подписан текстом. `--no-color`, непустой `NO_COLOR` или `TERM=dumb`
+отключают оформление; перенаправление в файл/pipe и JSON/NDJSON не содержат ANSI.
+Новые библиотеки или настройка терминала не нужны.
+Контракт цветов и терминальных проверок: [terminal-ui.ru.md](docs/terminal-ui.ru.md).
+
 Четыре обычных сценария администратора:
 
 ```bash
@@ -199,8 +206,10 @@ or listed result; IP reputation and domain reputation are separate.
 
 ## Findings, JSON and exit codes
 
-Human output is Russian, with technical evidence preserved. It is always free
-of ANSI controls; `--no-color` is accepted. JSON keys and finding IDs do not
+Human output is Russian, with technical evidence preserved. Terminal output
+uses a small status palette; `--no-color`, nonempty `NO_COLOR` or `TERM=dumb`
+disable it. Redirected output and JSON/NDJSON contain no ANSI controls.
+Color is added only after sanitizing and wrapping untrusted data. JSON keys and finding IDs do not
 change with human language. `--json` writes one JSON document; watch writes one
 valid JSON object per NDJSON line, including start/end/service events.
 

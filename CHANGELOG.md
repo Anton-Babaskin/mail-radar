@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.1.2 — unreleased
+
+* Add grouped interactive menus, colored status badges, section/field highlights
+  and readable live-watch progress, preserving numeric choices and text labels.
+* Enable the fixed ANSI palette only for terminal human output. Respect
+  --no-color, nonempty NO_COLOR and TERM=dumb; keep pipes/files/JSON/NDJSON plain.
+* Apply trusted styles after sanitization and line wrapping; keep the report
+  schema and diagnostic commands unchanged. No runtime dependency was added.
+
 ## 4.1.1 — unreleased
 
 * Use one workflow catalogue for CLI/menu/source requirements; require a local
