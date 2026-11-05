@@ -19,7 +19,7 @@ from .model import clean, finding, finish_report, redact_report, write_private
 from .runner import Runner, valid_user
 from .display import human
 from .timeutil import local_zone, timestamp
-from .terminal import formatted_line, paint, presentation
+from .terminal import formatted_line, paint, panel, presentation, render_menu, viewport, wrap_cells
 from .workflows import BY_MODE, CATALOGUE, HOST_MODES, LOG_MODES, MENU, TITLES
 
 
@@ -64,61 +64,85 @@ def parser():
     return p
 
 
+def _ask(prompt):
+    lines = wrap_cells(prompt, max(1, min(118, viewport()[0])-1))
+    for line in lines[:-1]:
+        print(paint(line, "prompt"))
+    return input(paint(lines[-1].rstrip() + " ", "prompt"))
+
+
+def _notice(message, role=None):
+    for index, line in enumerate(wrap_cells(message, min(118, viewport()[0]))):
+        print(formatted_line(line, "plain" if index and role is None else role), flush=True)
+
+
 def menu(args):
-    choices = [(workflow.menu_label or workflow.title, workflow.key) for workflow in MENU]
-    def ask(prompt):
-        return input(paint(prompt, "prompt"))
-    print("\n" + paint("┌─ MailRadar " + __version__ + " ───────────────────────────────────", "title"))
-    print(paint("  Локальная диагностика почты · выберите задачу", "muted"))
-    groups = {1: "Обзор", 2: "Письма и доставка", 6: "SMTP и политика", 9: "Сервер и домены", 12: "Поиск и наблюдение"}
-    for number, (label, _) in enumerate(choices, 1):
-        if number in groups:
-            print("\n  " + paint(groups[number], "section"))
-        print("  " + paint("%2d." % number, "key") + " " + label)
-    print("\n  " + paint(" 0. Выход", "muted"))
-    print(paint("└──────────────────────────────────────────────────────", "muted"))
+    labels = ("Общий обзор", "Входящее письмо", "Исходящее письмо", "Задержка доставки",
+              "Папки / Spam / Trash", "Очередь / SMTP-отказы", "Greylisting / повторы",
+              "Whitelist SMTP-клиента", "DNS / TLS / resolver", "Аккаунт / квота / диск",
+              "После обновления MIAB", "Наблюдать за доставкой", "Поиск ID / адреса", "Заголовки письма")
+    items = [dict(number=number, label=labels[number-1], description=workflow.help) for number, workflow in enumerate(MENU, 1)]
+    context = "ОФЛАЙН · источников: %d" % len(args.log) if args.offline else "ЛОКАЛЬНАЯ ДИАГНОСТИКА · сеть по запросу"
+    redraw = True
     while True:
-        choice = ask("Номер [1]: ").strip().lower() or "1"
+        if redraw:
+            render_menu(__version__, items, context=context)
+            redraw = False
+        choice = _ask("Номер [1]: ").strip().lower() or "1"
         if choice in ("0", "q", "quit", "exit", "выход"):
             return None
-        if choice.isdigit() and 1 <= int(choice) <= len(choices):
+        if choice in ("r", "обновить"):
+            redraw = True
+            continue
+        if choice in ("?", "h", "help", "справка"):
+            help_rows = ["1–5: обзор, расследование письма и его текущая папка.",
+                         "6–8: текущая очередь, SMTP-отказы, greylisting и whitelist.",
+                         "9–11: DNS/TLS, аккаунт/квота, состояние после обновления.",
+                         "12–14: наблюдение, поиск по ID/адресу и выбранные заголовки.",
+                         "Enter: общий обзор. r: перерисовать под размер окна. 0/q: выход.",
+                         "DNS-домен выбирается отдельно; resolver/TLS относятся к локальному MIAB."]
+            for line in panel("Справка по задачам", help_rows):
+                print(line)
+            continue
+        if choice.isdigit() and 1 <= int(choice) <= len(MENU):
             break
-        print(paint("Введите номер от 0 до %d." % len(choices), "error"))
-    args.mode = choices[int(choice)-1][1]
+        for line in wrap_cells("Введите номер от 0 до %d; ? — справка, r — обновить меню." % len(MENU), viewport()[0]):
+            print(paint(line, "error"))
+    args.mode = MENU[int(choice)-1].key
     args.trace = args.headers = None
     workflow = BY_MODE[args.mode]
     if workflow.envelope_prompt:
-        args.sender = ask("Отправитель (если известен): ").strip() or None
-        args.to = ask("Получатель (если известен): ").strip() or None
+        args.sender = _ask("Отправитель (если известен): ").strip() or None
+        args.to = _ask("Получатель (если известен): ").strip() or None
     if args.mode == "trace":
-        args.trace = ask("Message-ID, Queue ID, адрес, домен или IP: ").strip()
+        args.trace = _ask("Message-ID, Queue ID, адрес, домен или IP: ").strip()
         if not args.trace:
             raise ValueError("Для поиска нужно указать известный идентификатор или адрес")
     if workflow.requires_user:
-        args.user = ask("Локальный адрес: ").strip()
+        args.user = _ask("Локальный адрес: ").strip()
         if not valid_user(args.user):
             raise ValueError("Нужен один корректный локальный адрес")
         if args.mode == "headers":
-            args.headers = ask("Message-ID: ").strip()
+            args.headers = _ask("Message-ID: ").strip()
             if not args.headers:
                 raise ValueError("Укажите Message-ID письма")
         elif args.mode == "mailboxes":
-            args.headers = ask("Message-ID (если известен, иначе поиск за период): ").strip() or None
+            args.headers = _ask("Message-ID (если известен, иначе поиск за период): ").strip() or None
     if workflow.period_prompt:
-        args.hours = float(ask("Период в часах [24]: ").strip() or "24")
-        args.timezone = ask("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
-        args.since = ask("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
+        args.hours = float(_ask("Период в часах [24]: ").strip() or "24")
+        args.timezone = _ask("Часовой пояс [local, часовой пояс сервера]: ").strip() or "local"
+        args.since = _ask("Начало ISO 8601 с offset (необязательно): ").strip() or args.since
     if args.mode == "watch":
-        args.seconds = float(ask("Наблюдать секунд [180]: ").strip() or "180")
+        args.seconds = float(_ask("Наблюдать секунд [180]: ").strip() or "180")
     if args.mode == "whitelist":
-        args.client_name = ask("Имя SMTP-клиента (если известно): ").strip() or None
-        args.client_ip = ask("IP SMTP-клиента (если известен): ").strip() or None
+        args.client_name = _ask("Имя SMTP-клиента (если известно): ").strip() or None
+        args.client_ip = _ask("IP SMTP-клиента (если известен): ").strip() or None
     if int(choice) == 9:
-        args.domain = ask("Проверяемый домен (пусто — домен сервера): ").strip() or None
-        print(paint("DNS проверяется для выбранного домена. TLS, resolver и relay относятся к MIAB, где запущен Radar.", "muted"))
-        args.network = ask("Выполнить DNS-запросы и TLS-проверки? [y/N]: ").lower() in ("y", "yes", "д", "да")
+        args.domain = _ask("Проверяемый домен (пусто — домен сервера): ").strip() or None
+        _notice("DNS проверяется для выбранного домена. TLS, resolver и relay относятся к MIAB, где запущен Radar.", "muted")
+        args.network = _ask("Выполнить DNS-запросы и TLS-проверки? [y/N]: ").lower() in ("y", "yes", "д", "да")
     if args.mode == "post-update":
-        args.network = ask("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
+        args.network = _ask("Выполнить ограниченные DNS/TLS/HTTP-пробы? [y/N]: ").lower() in ("y", "yes", "д", "да")
     return args
 
 def validate(p, args):
@@ -325,12 +349,12 @@ def watch(args, runner, since, until, paths, interrupted):
         if args.json:
             print(json.dumps(payload, ensure_ascii=False), flush=True)
         elif kind == "watch_started":
-            print(paint("Наблюдение начато · %g с · Ctrl+C — завершить" % values["seconds"], "section"), flush=True)
-            print(paint("Ротация и усечение могут оставлять пробелы; они будут указаны в итоговом отчёте.", "muted"), flush=True)
+            _notice("Наблюдение начато · %g с · Ctrl+C — завершить" % values["seconds"], "section")
+            _notice("Ротация и усечение могут оставлять пробелы; они будут указаны в итоговом отчёте.", "muted")
         elif kind == "watch_progress":
-            print(paint("Прочитано байт: %d · найдено Queue ID/lifecycle: %d" % (values["bytes_observed"], values["matched_queues"]), "key"), flush=True)
+            _notice("Прочитано байт: %d · найдено Queue ID/lifecycle: %d" % (values["bytes_observed"], values["matched_queues"]), "key")
             for item in values.get("findings", []):
-                print(formatted_line("[%s] %s" % (item["status"], clean(item["title"]))), flush=True)
+                _notice("[%s] %s" % (item["status"], clean(item["title"])))
         elif kind == "source_gap":
             reasons = {
                 "Watch source missing, unreadable or not a regular file at start": "Файл отсутствует, недоступен или не является обычным файлом при старте",
@@ -342,9 +366,9 @@ def watch(args, runner, since, until, paths, interrupted):
                 "Watch byte limit reached": "Достигнут лимит чтения байтов",
                 "Trailing partial line discarded": "Незавершённая последняя строка пропущена",
             }
-            print(formatted_line("[UNKNOWN] " + reasons.get(values["reason"], clean(values["reason"]))), flush=True)
+            _notice("[UNKNOWN] " + reasons.get(values["reason"], clean(values["reason"])))
         else:
-            print(formatted_line(kind + ": " + json.dumps(values, ensure_ascii=False)), flush=True)
+            _notice(kind + ": " + json.dumps(values, ensure_ascii=False))
     def gap(reason, truncated=False):
         nonlocal capture_truncated
         capture_truncated = capture_truncated or truncated
@@ -525,7 +549,7 @@ def _run_once(args, p):
             else:
                 human(report,details=args.details,no_color=args.no_color)
                 if args.report:
-                    print("Приватный отчёт сохранён: "+clean(args.report))
+                    _notice("Приватный отчёт сохранён: "+clean(args.report))
             return 130 if interrupted[0] else report["summary"]["exit_code"]
     except KeyboardInterrupt:
         report = finish_report(dict(mode=args.mode, findings=[finding("run.interrupted", "UNKNOWN", "Диагностика прервана сигналом; результат неполный")], completeness=dict(complete=False)))
@@ -576,15 +600,17 @@ def _session(args, p):
                 selected = menu(copy.deepcopy(args))
                 if selected is None:
                     return last_code
-                print("\n" + paint("Проверка: " + TITLES[selected.mode], "section"))
+                print()
+                _notice("Проверка: " + TITLES[selected.mode], "section")
                 last_code = _run_once(selected, p)
             except (ValueError, ZoneInfoNotFoundError) as error:
-                print(paint("Ошибка ввода: " + clean(error), "error"))
+                _notice("Ошибка ввода: " + clean(error), "error")
             except SystemExit as error:
                 if error.code not in (2,3):
                     raise
                 last_code = error.code
-            again = input("\n" + paint("Enter — вернуться в меню; 0 — выход: ", "prompt")).strip().lower()
+            print()
+            again = _ask("Enter — вернуться в меню; 0 — выход: ").strip().lower()
             if again in ("0","q","quit","exit","выход"):
                 return last_code
             args.report = None  # an explicit create-once report path applies to the first run

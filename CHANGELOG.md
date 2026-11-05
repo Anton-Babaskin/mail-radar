@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.2.0 — unreleased
+
+* Add a branded MAILRADAR wordmark/radar header, responsive menu cards, contextual
+  report header and section dividers. Compact artwork fits ordinary SSH windows;
+  larger windows show the full wordmark and workflow hints.
+* Add ? help and r redraw, retaining all 14 numeric choices and return/exit keys.
+* Measure visible Unicode cells and current terminal geometry; wrap long prompts,
+  addresses and evidence without clipping. Keep ASCII frame/art fallback for
+  basic terminals, optional colors, and unstyled file/JSON/NDJSON contracts.
+
 ## 4.1.2 — unreleased
 
 * Add grouped interactive menus, colored status badges, section/field highlights
