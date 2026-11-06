@@ -1,91 +1,96 @@
-# MailRadar
+<div align="center">
 
-Local, evidence-based delivery diagnostics for Mail-in-a-Box and compatible
-Postfix/Dovecot hosts. One command collects the available facts, correlates mail
-logs and explains where delivery evidence ends. No cloud account or AI is needed.
+![MailRadar — follow the evidence](docs/assets/mailradar-banner.svg)
 
-MailRadar continues the existing **miab-radar** project. `miab-radar` remains a
-compatible command; no second repository or separate Mail Doctor is required.
+**Know where your mail went. See what the evidence proves.**
 
-## Быстрый старт
+Local delivery diagnostics for **Mail-in-a-Box · Postfix · Dovecot**.
 
-Текущий контракт MVP и результаты проверки кода:
-[аудит диагностической логики](docs/mvp.ru.md), [14 сценариев и примеры вывода](docs/task-reports.ru.md).
+[![Linux validation](https://github.com/Anton-Babaskin/mail-radar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Anton-Babaskin/mail-radar/actions/workflows/ci.yml)
+[![Version 4.2.0](https://img.shields.io/badge/version-4.2.0-f4bf64?style=flat-square)](CHANGELOG.md)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-53dce8?style=flat-square&logo=python&logoColor=white)](#requirements)
+[![Ubuntu 22.04](https://img.shields.io/badge/Ubuntu-22.04-e95420?style=flat-square&logo=ubuntu&logoColor=white)](docs/validation.md)
+[![MIT license](https://img.shields.io/badge/license-MIT-a6d189?style=flat-square)](LICENSE)
 
-Целевая среда — MIAB на Ubuntu 22.04; базовая диагностика также рассчитана на
-обычные Postfix/Dovecot в Debian/Ubuntu. Нужны Bash и Python **3.9+** без pip.
-Mailcow/iRedMail не объявляются полностью поддержанными без отдельных адаптеров.
+**English** · [Русский](README.ru.md) · [Українська](README.uk.md)
+
+[Quick start](#quick-start) · [Workflows](#choose-a-workflow) · [Screenshots](#terminal-experience) · [Next version](#next-version--proposed-43)
+
+</div>
+
+---
+
+MailRadar brings the current queue, delivery history, SMTP refusals and mailbox
+evidence into one investigation. Reports show addresses, domains, Queue IDs,
+timestamps and reasons, with clear boundaries between confirmed facts and missing
+data. It runs locally, without a cloud account, AI service or runtime pip packages.
+
+| Follow a message | Understand the server | Keep the evidence |
+|:---|:---|:---|
+| Correlate Postfix hops, recipients, delays and Dovecot Saved events. | Inspect queues, DNS/TLS, greylisting, whitelist, quota and post-update state. | Read the terminal report, open details or export JSON/NDJSON and a private report. |
+
+> **Language:** these READMEs are available in English, Russian and Ukrainian.
+> The **4.2.0 menu, prompts and human reports are in Russian**. CLI flags and JSON
+> keys stay language independent; translated terminal UI is on the roadmap.
+
+## Terminal experience
+
+![MailRadar 4.2.0: branded radar, two-column menu and task descriptions](docs/assets/terminal-menu.png)
+
+*Actual 120×40 PTY session using synthetic offline fixtures. This screenshot
+demonstrates the interface; it is not evidence of a live MIAB validation.*
+
+The gold wordmark and cyan radar adapt to the window. Wide terminals show task
+cards; ordinary SSH windows get a compact header; narrow windows use one column.
+Reports keep **the current queue separate from historical Queue IDs and attempts**.
+Long addresses and reasons wrap without being discarded to fit a card.
+
+| Key / option | Action |
+|---|---|
+| `1`–`14` | Select an investigation |
+| `Enter` | Open the overview; return to the menu after a report |
+| `?` / `r` | Show help / redraw after resizing |
+| `0` / `q` / `Ctrl+C` | Leave the menu session |
+| `--details` | Show more checks and evidence |
+| `--no-color` | Disable color; nonempty `NO_COLOR` and `TERM=dumb` also disable it |
+
+<details>
+<summary><strong>Report layout and narrow-terminal view</strong></summary>
+
+![MailRadar report: result, time window, node, filters and evidence](docs/assets/terminal-report.png)
+
+*Report excerpt from the same offline fixture; full output remains scrollable.*
+
+<img src="docs/assets/terminal-narrow.png" alt="Single-column MailRadar menu in a 32-column terminal" width="440">
+
+*A real 32-column PTY recording. Very narrow terminals may require vertical scrolling.*
+
+</details>
+
+## Quick start
+
+### Requirements
+
+- **Target:** Mail-in-a-Box on Ubuntu 22.04. Basic diagnostics also target compatible
+  Postfix/Dovecot hosts on Debian/Ubuntu; Mailcow/iRedMail need separate adapters.
+- **Runtime:** Bash and Python **3.9+**, using the standard library.
+- Run with `sudo` to access protected logs and local service metadata. Without it,
+  unavailable checks remain `UNKNOWN`.
 
 ```bash
 git clone https://github.com/Anton-Babaskin/mail-radar.git
 cd mail-radar
-bash ./mail-radar --help
-sudo bash ./mail-radar
-```
-
-В интерактивном терминале запуск без аргументов открывает сессию меню: после
-отчёта Enter возвращает к выбору, `0` завершает работу. В меню доступны также
-поиск по идентификатору и выбранные заголовки. `--menu` включает такую сессию
-явно, например вместе с `--log`/`--offline`. В cron/pipe вопросы не задаются. Обычный обзор читает доступные
-состояние служб, Postfix, очередь и логи, собирает факты в общем временном окне
-и показывает статусы с evidence и следующими действиями. Без root доступна
-частичная диагностика; недоступные проверки отмечаются UNKNOWN. Обычный
-терминальный отчёт краткий; `--details` раскрывает проверки и строки
-доказательств, `--json` сохраняет машинный контракт без меню.
-
-В терминале меню сгруппировано по задачам, разделы и ключевые поля выделены
-цветом: OK — зелёный, WARN — жёлтый, FAIL — красный, UNKNOWN — синий.
-Статус всегда подписан текстом. `--no-color`, непустой `NO_COLOR` или `TERM=dumb`
-отключают оформление; перенаправление в файл/pipe и JSON/NDJSON не содержат ANSI.
-Новые библиотеки или настройка терминала не нужны.
-Контракт цветов и терминальных проверок: [terminal-ui.ru.md](docs/terminal-ui.ru.md).
-
-Фирменная шапка содержит рисунок радара и логотип MAILRADAR. На широком экране
-задачи стоят в двух карточках, в узком окне — одним списком. Размер рисунка,
-подсказки и переносы подстраиваются под терминал. `?` открывает справку по
-сценариям, `r` перерисовывает меню после изменения размера. В отчёте сверху
-показаны результат, период, узел и фильтры; текущая очередь и история подписаны
-отдельно. Длинные адреса и причины переносятся с сохранением текста.
-
-Четыре обычных сценария администратора:
-
-```bash
-# Не пришло письмо: Message-ID заранее знать не требуется.
-sudo bash ./mail-radar --diagnose --from sender@example.org --to office@example.com --hours 24
-
-# Клиент SMTP попал под greylisting/whitelist после обновления.
-sudo bash ./mail-radar --whitelist --client-name mx.partner.example --client-ip 203.0.113.10
-
-# Найти сохранённое письмо и текущую папку, не извлекая тело.
-sudo bash ./mail-radar --headers '<message.1@example.org>' --user office@example.com
-
-# Разобрать собранные логи на другом компьютере без системных команд и сети.
-bash ./mail-radar --trace sender.example --offline --log ./examples/mail.log --since '2026-11-02T09:00:00Z' --until '2026-11-02T10:00:00Z'
-```
-
-Для общего обзора без меню используйте `--doctor`. Старые `miab-radar 48` и
-`mail-radar 48` означают обычный обзор последних 48 часов.
-
-## Обновление существующей копии
-
-Если каталог `mail-radar` уже существует, перейдите в него и обновите эту
-рабочую копию. Повторный `git clone` её не обновляет. Сначала сохраните свои
-локальные правки; если Git сообщает о конфликте или расходящейся истории,
-разберите расхождение с сохранением этих правок.
-
-```bash
-cd /путь/к/существующему/mail-radar
-git switch main
-git pull --ff-only origin main
 bash ./mail-radar --version
 sudo bash ./mail-radar --menu
 ```
 
-`bash ./mail-radar` запускает исходники из этого каталога. Команда `mail-radar`
-без `./` обычно запускает отдельно установленную копию из `/usr/local/bin`.
-Обновление Git-каталога не заменяет установленный Python-пакет. Если вы
-пользуетесь глобальной командой, после обновления исходников повторите установку
-и отдельно проверьте её версию:
+Running without arguments opens the menu in an interactive terminal. Use
+`--doctor` for a direct overview. Redirected output and JSON/NDJSON have no menu,
+artwork or ANSI colors. The compatible command name `miab-radar` is retained.
+
+### Install a global command
+
+Review the checkout, then install MailRadar's own files:
 
 ```bash
 sudo bash ./install.sh
@@ -93,194 +98,146 @@ mail-radar --version
 sudo mail-radar --menu
 ```
 
-Сверяйте версию именно той команды, которой запускаете диагностику. `--help`
-также показывает её версию; отсутствие `--menu`/`--details` в старом help и
-большой вывод MailRadar 4.0.0 не проверяют поведение обновлённой копии.
+The installer updates `/usr/local/bin/{mail-radar,miab-radar}` and
+`/usr/local/lib/mail-radar/mailradar/`. It checks the runtime manifest, Python syntax
+and internal imports before replacing files. It does not install OS packages or
+restart services. See the [installation details](docs/usage.md#installation) for
+staging, prefixes and limitations.
 
-## Installation
+### Update an existing copy
 
-Review the checkout, then install its own files only:
-
-```bash
-sudo bash ./install.sh
-mail-radar --help
-sudo mail-radar --doctor
-```
-
-Default destinations are `/usr/local/bin/mail-radar`,
-`/usr/local/bin/miab-radar`, and `/usr/local/lib/mail-radar/mailradar/`.
-The installer locates sources relative to itself, independent of the current
-working directory. It never installs packages, downloads code or changes services.
-Existing regular MailRadar files are updated; symlink destinations are refused.
-Use a trusted checkout and installation prefix.
-
-`runtime-files.txt` declares the complete runtime. Before replacing installed
-files, the installer checks every declared file, Python syntax and internal
-imports without executing the modules. Missing or damaged sources fail before
-writes; unrelated scratch modules are not copied. This preflight does not provide
-rollback for an interrupted copy or disk failure.
-
-An isolated staged install needs no root:
+Save local changes first. Update the checkout; repeating `git clone` does not update it:
 
 ```bash
-DESTDIR="$PWD/stage" PREFIX=/usr/local bash ./install.sh
-"$PWD/stage/usr/local/bin/mail-radar" --version
+cd /path/to/mail-radar
+git switch main
+git pull --ff-only origin main
+bash ./mail-radar --version
+sudo bash ./mail-radar --menu
 ```
 
-`PREFIX` must be absolute; `DESTDIR` must be empty or absolute. Run the installer
-again from a reviewed checkout to update the package and both launchers together.
-There is no runtime dependency on the Git checkout or on sibling projects.
+**Using the global `mail-radar` command?** Run `sudo bash ./install.sh` again after
+pulling, then check `mail-radar --version`. Updating the checkout alone does not
+update the installed copy.
 
-## Workflows and filters
+## Choose a workflow
 
-| Mode | Purpose |
-|---|---|
-| `--doctor` | Fast state snapshot: services, queue, configuration, disks and log evidence |
-| `--diagnose` | Targeted delivery investigation with available host and mailbox facts |
-| `--incoming`, `--outgoing`, `--delay` | Incoming, outgoing and delay investigations with message paths and relevant mail checks |
-| `--queue` | Current queue entries, sender/recipients, age, size and per-recipient causes; historical refusals in a separate section |
-| `--dns` | Selected domain DNS plus this MIAB's TLS, resolver and relay; targets are shown explicitly |
-| `--account --user ADDRESS` | Local userdb, structured quota and filesystem capacity; no mailbox/header search |
-| `--trace VALUE` | Correlated queues/events matching a literal Message-ID, queue ID, address, domain or IP |
-| `--flow` | Shared-window message/queue/recipient-event and failure statistics |
-| `--greylist` | Postgrey reject/pass/retry evidence and triplet boundaries |
-| `--whitelist` | Postfix maps, order/overrides, Postgrey file and client match |
-| `--watch` | Bounded observation of new log data; `--json` emits NDJSON |
-| `--headers MESSAGE_ID` | Selected Date/Received/Message-ID and Dovecot metadata; requires `--user` |
-| `--mailboxes` | Targeted account/quota/metadata for `--user`; `--deep` adds physical inspection |
-| `--post-update` | Services, Postfix state, whitelist wiring, resolver and backup-tooling signals |
+| Menu | CLI | What you see |
+|:---:|---|---|
+| 1 | `--doctor` | Overview of available services, configuration, queue and log evidence |
+| 2 | `--incoming` | Incoming message path, recipients and delivery evidence |
+| 3 | `--outgoing` | Outgoing handoffs, SMTP responses and failure causes |
+| 4 | `--delay` | Delays, deferred attempts and retry evidence |
+| 5 | `--mailboxes --user ADDRESS` | One local account's folder/metadata evidence; `--deep` adds physical inspection |
+| 6 | `--queue` | Current Queue ID, sender, recipients, age, size and reasons; history separately |
+| 7 | `--greylist` | Postgrey triplets, refusals, passes and observed retries |
+| 8 | `--whitelist` | SMTP-client maps, matches, ordering and policy-service implications |
+| 9 | `--dns --domain DOMAIN` | Selected domain's DNS; this server's TLS, resolver and relay |
+| 10 | `--account --user ADDRESS` | Account, quota resources and filesystem capacity |
+| 11 | `--post-update` | Services, Postfix, whitelist, resolver and backup-tooling signals |
+| 12 | `--watch` | Bounded observation of new log events; NDJSON with `--json` |
+| 13 | `--trace VALUE` | Literal Message-ID, Queue ID, address, domain or IP search |
+| 14 | `--headers MESSAGE_ID --user ADDRESS` | Selected headers, folder, UID and flags for one local mailbox |
 
-`--from`, `--to`, `--domain`, `--ip`, `--client-name`, `--client-ip` and `--user`
-represent different entities. Client whitelist does not authorize a From address.
-`--peer IP` adds runtime OS-route evidence; a route is not proof of persistence.
-`--deep` requires a specific user/recipient and does not scan every mailbox.
+`--diagnose` combines a targeted delivery investigation; `--flow` shows shared-window
+statistics. Use `--hours N` or explicit `--since` / `--until` timestamps with offsets.
 
-Use `--hours N` or `--since`/`--until` ISO 8601 timestamps. Offsets and `Z` are
-honoured. For historical syslog without a year, pass `--year` and `--timezone`
-(an IANA zone such as `Europe/Istanbul` or `UTC`). Ambiguous/skipped wall-clock
-times require an explicit offset. The report lists source and parsing limits.
-
-`--log PATH` is repeatable and supports plain files, gzip, bzip2 and xz; `--log -`
-reads stdin. Mail-history workflows discover local `mail.log*`/`maillog*` when no
-paths are supplied. DNS, whitelist, account and mailbox/header lookups do not
-automatically scan unrelated logs; explicit `--log`/`--journal` can add history. Automatic
-plain-file scans retain a bounded recent suffix first, with negative line
-numbers counting from EOF. Omitted prefixes are explicitly incomplete context;
-this is not proof of a fully covered interval. Explicit `--log` scans retain
-the caller's forward-source contract.
-`--journal` adds newest-first bounded journal collection (including Debian
-`postfix@*.service` instances and 24 hours of pre-window context). `--offline` requires explicit logs
-and prohibits journal/network commands. `--max-bytes` and `--max-lines` bound
-input; hitting a limit marks results incomplete instead of implying no errors.
-Compressed input files are limited to 128 MiB each; LZMA decoder dictionary
-memory is limited to 64 MiB. A rejected archive is reported as UNKNOWN.
-
-Common anchored Postfix/Postgrey/Dovecot log formats are recognized; unsupported
-delivery grammar within the selected window marks coverage incomplete. Known
-out-of-window grammar failures are counted separately as `unparsed_context`;
-unknown timestamps, unreadable sources and read limits still mark incompleteness.
-Pre-window correlation evidence is retained. Yearless syslog is interpreted as
-the newest calendar occurrence not later than `--until`; multi-year archives
-need explicit-year timestamps (`--year` supplies a single year). Reinjection is
-linked only by explicit same-host evidence with a unique target within 300
-seconds. `observed_messages` counts inferred linked groups and can overcount
-when hops are missing.
+### Everyday investigations
 
 ```bash
-sudo mail-radar --watch --from sender@example.org --to office@example.com --seconds 180 --log /var/log/mail.log --json
-sudo mail-radar --post-update --json
-sudo mail-radar --diagnose --to office@example.com --hours 24 --json --report /root/incident-new.json
+# A missing message: start with the addresses, no Message-ID required.
+sudo bash ./mail-radar --incoming --from sender@example.org --to office@example.com --hours 24
+
+# Current queue entries and historical refusals, with more evidence.
+sudo bash ./mail-radar --queue --details
+
+# Locate a known message in one local mailbox without reading its body.
+sudo bash ./mail-radar --headers '<message.1@example.org>' --user office@example.com
+
+# Reproduce an investigation from the included log without host commands or network.
+bash ./mail-radar --trace sender.example --offline --log ./examples/mail.log --since '2026-11-02T09:00:00Z' --until '2026-11-02T10:00:00Z'
+
+# Create a new private JSON report; existing paths are refused.
+sudo bash ./mail-radar --diagnose --to office@example.com --hours 24 --json --redact --report /root/incident-new.json
 ```
 
-Watch starts at the current end of plain log files and handles observed rotation
-and truncation. Rotation races can lose events; gaps are reported and a final
-trace over retained logs is recommended. It is not a lossless log collector.
+### What does entering a domain do?
 
-## Active network probes
+`--domain` filters matching log history and, in DNS workflows, identifies the DNS
+target. **It does not log into that domain's server or fetch its private mail logs.**
+Services, queue, resolver, relay and local TLS configuration belong to the host
+where MailRadar is running. Reports label these scopes separately.
 
-Local analysis is the default. Explicit `--network` permits bounded DNS, TLS and
-local management-endpoint probes, which appear in `active_probes` in the report:
+Local analysis is the default. `--network` explicitly permits bounded DNS/TLS/local
+management-endpoint probes; the menu asks before enabling them. No test message,
+SMTP AUTH or real relay delivery is performed. DNSBL errors are not treated as
+proof that an address is clean or listed.
 
-```bash
-sudo mail-radar --doctor --network --domain example.com --ip 203.0.113.10 --dkim-selector mail
-```
-
-No SMTP AUTH, test message, OTP request or real relay delivery is performed.
-A known DKIM selector is used rather than guessing several names and declaring
-DKIM absent. Local success does not establish external firewall/provider access.
-DNS failures and DNSBL service/error replies remain distinct from a valid clean
-or listed result; IP reputation and domain reputation are separate.
-
-## Findings, JSON and exit codes
-
-Human output is Russian, with technical evidence preserved. Terminal output
-uses a small status palette; `--no-color`, nonempty `NO_COLOR` or `TERM=dumb`
-disable it. Redirected output and JSON/NDJSON contain no ANSI controls.
-Color is added only after sanitizing and wrapping untrusted data. JSON keys and finding IDs do not
-change with human language. `--json` writes one JSON document; watch writes one
-valid JSON object per NDJSON line, including start/end/service events.
-
-Reports contain `schema_version`, tool/mode/window/filters, sources,
-`completeness`, findings/evidence, statistics/traces and summary. A finding has
-an ID, status, title, evidence, next step and details; source/time context is
-included where available. Schema version `1.0` is Radar's contract, not automatic
-FleetOps compatibility: see [the explicit mapping](docs/integrations.md).
-Delivery conclusions participate in overall status and exit severity, with
-separate `summary.conclusion_counts`; `summary.counts` remains findings-only.
-The full conclusion set is retained in JSON. Compact output prioritizes failures
-and reports how many further conclusions are available. Standalone Dovecot
-Saved evidence is shown without inventing a Postfix queue or SMTP attempt.
+## Read the result correctly
 
 | Status | Meaning |
 |---|---|
-| OK | Available evidence confirms this individual check |
-| WARN | A confirmed condition deserves review |
-| FAIL | A confirmed failure requires attention |
-| UNKNOWN | Evidence, permissions, tool support or completeness is insufficient |
-| N/A | The method does not apply, e.g. CIDR lookup for a domain |
+| 🟢 `OK` | Available evidence confirms this check |
+| 🟡 `WARN` | A confirmed condition needs review |
+| 🔴 `FAIL` | A confirmed failure needs attention |
+| 🔵 `UNKNOWN` | Evidence, permissions, support or coverage is insufficient |
+| ⚪ `N/A` | The check does not apply |
 
-| Exit | Meaning |
-|---:|---|
-| 0 | No FAIL/WARN/UNKNOWN or incomplete mandatory result in the observed scope |
-| 1 | Warning, UNKNOWN or incomplete diagnostics |
-| 2 | FAIL findings; also invalid CLI usage (with argument error) |
-| 3 | Runtime/output-file error |
-| 130 | Interrupted; result is incomplete |
+An empty match set does not prove delivery. A remote SMTP `250` confirms acceptance
+by the next hop; Dovecot `Saved` confirms storage at that event, not the current folder.
+Source limits, unparsed records and missing context remain visible.
 
-An empty match set does not prove successful delivery. Remote SMTP 250 proves
-next-hop acceptance, not the final INBOX. Dovecot Saved proves storage at that
-point, not the current folder or the cause of a later move.
+Exit codes: **0** clean observed scope · **1** warning/unknown/incomplete · **2** failure
+or invalid arguments · **3** runtime/report-file error · **130** interrupted.
+JSON schema `1.0`, finding IDs and exit semantics are independent of terminal styling.
 
-## Privacy and read-only boundary
+### Privacy and operating boundary
 
-Diagnosis does not change mail configuration, holds, packages, routes, messages,
-IMAP flags or queues. No restart/reload, postmap rebuild, postsuper, apt upgrade,
-netplan apply or reboot is part of diagnosis. MIAB setup/update wrappers are
-never run for version/help detection. `postmap -q` is a read-only lookup.
-Dovecot metadata reads may refresh service indexes.
+Diagnosis does not change mail configuration, queues, messages, holds, packages,
+routes or service state. Dovecot metadata reads may refresh service indexes.
+Bodies, attachments and credential files are not intentionally collected.
+`--report NEW_PATH` creates a private `0600` file and refuses existing files/symlinks.
+`--redact` aliases identifiers consistently within an export; review free text,
+paths and IDs before sharing. **It is not guaranteed anonymization.** Reports are
+not automatically sent to email, Telegram or another service.
 
-`--report NEW_PATH` creates a private file (0600), refusing existing files and
-symlinks. Reports never intentionally include message bodies, attachments or
-credential files. They still contain operational identifiers and log evidence.
-`--redact` consistently aliases addresses/IPs/domains within one export; review
-paths, Queue IDs, Message-IDs and free text before sharing. It is not guaranteed
-anonymization. No report is sent to Telegram, email or another service.
+## Next version — proposed 4.3
 
-Routine blocked relay attempts and successful Fail2Ban bans are observations,
-not server-failure findings in a general overview. A matching pre-queue reject
-in a targeted investigation remains WARN. The general external-evidence boundary
-is N/A; missing or truncated required input still produces UNKNOWN/exit 1.
-This changes the previous 4.0.0 behavior where every log report was UNKNOWN.
+These are **planned improvements, not available 4.2.0 features or a release-date promise**.
+The first priority is stronger evidence from real MIAB systems.
 
-See [the MIAB production-shape audit](docs/miab-audit-2026-11-03.ru.md) for
-regressions discovered after the initial release and the reviewed overlap with
-PRs #5/#6, and [the runtime/version follow-up](docs/runtime-audit-2026-11-03.ru.md)
-for the distinction between an old running copy and newly reproduced defects.
+| Priority | Work | Ready when |
+|---|---|---|
+| P1 | Real MIAB acceptance and anonymized fixtures | All 14 workflows are compared with local Postfix/Dovecot facts; environment and limits are recorded. |
+| P1 | More real log formats | Confirmed `NOQUEUE filter/hold/discard`, header warnings and separate SMTP replies have fixtures and regressions; unsupported grammar still marks coverage incomplete. |
+| P1 | Current queues across Postfix instances | Each queue identifies its instance; unavailable instances are reported; equal Queue IDs from different instances remain separate. |
+| P2 | English / Russian / Ukrainian terminal UI | `--lang en\|ru\|uk` covers menu, prompts, errors and reports without changing JSON keys, finding IDs or facts. |
+| P2 | Easier long investigations | Queue-list navigation, filters and period selection work at 32/80/120 columns; watch gaps have clear recovery guidance. |
+| P2 | Deeper DNSBL configuration coverage | Direct restrictions, restriction classes and access-map actions are distinguished; unresolved dynamic cases remain `UNKNOWN`, credential maps stay unread. |
 
-## Development and evidence
+Current limits also include non-atomic queue snapshots, possible watch rotation
+gaps and no proof of a remote final INBOX. The current release has **not yet been
+validated on a live MIAB**; the completed checks use fixtures and isolated Linux environments.
 
-The current acceptance scope, confirmed fixes and remaining limits are in
-[the MVP audit](docs/mvp.ru.md). Earlier audit files record earlier baselines.
+## Documentation and validation
+
+| Start here | Contents |
+|---|---|
+| [Extended usage](docs/usage.md) | Detailed installation, filters, timestamps, log sources, network and JSON contracts (EN/RU) |
+| [Workflow guide](docs/task-reports.ru.md) | All 14 scenarios and report examples (RU) |
+| [Terminal design](docs/terminal-ui.ru.md) | Layout, colors, accessibility and output boundaries (RU) |
+| [MVP audit](docs/mvp.ru.md) | Confirmed fixes, scope and remaining limitations (RU) |
+| [Validation record](docs/validation.md) | Executed checks, environments and qualifications |
+| [Architecture](docs/adr/0001-diagnostics-architecture.md) · [Integrations](docs/integrations.md) | Module boundaries and responsibilities of related projects |
+| [Changelog](CHANGELOG.md) | Version history |
+
+The 4.2.0 validation recorded **301 passing tests on each of Python 3.9 and 3.10**,
+plus Ruff, ShellCheck, Bash syntax and real PTY checks. CI uses Ubuntu 22.04,
+synthetic logs and fake host commands; real `dig` integration tests query only an
+ephemeral loopback DNS fixture. These results do not establish live-server acceptance.
+
+<details>
+<summary><strong>Development checks</strong></summary>
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
@@ -290,23 +247,17 @@ for script in mail-radar miab-radar install.sh; do bash -n "$script"; done
 shellcheck mail-radar miab-radar install.sh
 ```
 
-Tests use synthetic fixtures and fake host commands. Two integration cases run
-the real `dig` against an ephemeral loopback DNS server; install `dnsutils` to
-run them locally (CI installs it and checks `dig -v`). No public DNSBL or live
-mail server is contacted. Ruff is a development dependency only.
-Linux CI covers Python 3.9 and 3.10 on Ubuntu 22.04. A Windows or
-Git Bash run alone does not establish Linux support. Actual validation results,
-including checks not run, belong in [validation.md](docs/validation.md).
+Install `dnsutils` to run the real `dig` fixture cases locally. Runtime diagnostics
+do not need Ruff or pip. CI results are linked by the live badge above.
 
-Read [the source audit and preservation table](docs/code-audit.ru.md),
-[architecture decision](docs/adr/0001-diagnostics-architecture.md),
-[anonymized operational context](docs/engineering-context.ru.md) and
-[project boundaries](docs/integrations.md), with
-[primary-source semantics](docs/reference-semantics.md). Broader security auditing,
-physical-mailbox inventory, relay configuration and fleet orchestration remain
-with their existing owner projects. Optional sibling tools are not downloaded
-or executed automatically during diagnosis.
+</details>
 
-## License
+---
 
-MIT — see [LICENSE](LICENSE). Author: Anton Babaskin.
+<div align="center">
+
+**MailRadar** · Created by [Anton Babaskin](https://github.com/Anton-Babaskin) · [MIT](LICENSE)
+
+[Report a bug](https://github.com/Anton-Babaskin/mail-radar/issues) · [View changes](CHANGELOG.md) · [Back to top](#readme)
+
+</div>
